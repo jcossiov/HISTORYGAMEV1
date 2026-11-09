@@ -9,7 +9,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy": "vite build && cd dist && git init && git checkout -b gh-pages && git add -A && git commit -m 'deploy: update GitHub Pages' && git remote add origin https://github.com/jcossiov/HISTORYGAMEV1.git && git push origin gh-pages --force && rm -rf .git"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
