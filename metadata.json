@@ -1,0 +1,6 @@
+{
+  "name": "History Game: Guardianes del Destino",
+  "description": "Juego RPG de acción 3D para forjar buenos hábitos de vida, superar 15 niveles de transformación social, tecnología Pro y programar mechs legendarios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
