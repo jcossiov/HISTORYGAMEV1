@@ -1,27 +1,40 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { HabitLevel, AvatarProfile, MechConfiguration, TeamSquad } from './types/game';
 import { ALL_LEVELS, INITIAL_LOGIC_BLOCKS, INITIAL_TEAMS } from './data/levelsData';
-import { ThreeGameArena } from './components/ThreeGameArena';
-import { AvatarCustomizer } from './components/AvatarCustomizer';
-import { MechProgrammingStudio } from './components/MechProgrammingStudio';
 import { LevelSelector } from './components/LevelSelector';
 import { TeamsCodex } from './components/TeamsCodex';
 import { HeaderNav, NavTabType } from './components/HeaderNav';
 import { PublicServerLobby } from './components/PublicServerLobby';
-import {
-  Hero3DPortrait,
-  Referee3DPortrait,
-} from './components/CharacterCardVisuals';
+import { Hero3DPortrait, Referee3DPortrait } from './components/CharacterCardVisuals';
+import { submitScore } from './utils/leaderboard';
 import { soundEffects } from './utils/soundEffects';
-import { Play, Trophy, Volume2 } from 'lucide-react';
+import { Play, Sparkles } from 'lucide-react';
 
-const STORAGE_KEY = 'history_game_save_v2';
+const ThreeGameArena = lazy(() =>
+  import('./components/ThreeGameArena').then((m) => ({ default: m.ThreeGameArena }))
+);
+const AvatarCustomizer = lazy(() =>
+  import('./components/AvatarCustomizer').then((m) => ({ default: m.AvatarCustomizer }))
+);
+const MechProgrammingStudio = lazy(() =>
+  import('./components/MechProgrammingStudio').then((m) => ({ default: m.MechProgrammingStudio }))
+);
+
+const STORAGE_KEY = 'story_game_medellin_save_v3';
+
+function LoadingScreen({ label }: { label: string }) {
+  return (
+    <div className="w-full min-h-[55vh] flex flex-col items-center justify-center gap-3">
+      <div className="w-10 h-10 rounded-full border-2 border-sky-200 border-t-sky-500 animate-spin" />
+      <p className="font-heading font-medium text-slate-500 text-xs tracking-wide">{label}</p>
+    </div>
+  );
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTabType>('levels');
   const [activeGameLevel, setActiveGameLevel] = useState<HabitLevel | null>(null);
 
-  // Kid-friendly Progression State
   const [playerName, setPlayerName] = useState<string>('SuperGuardián');
   const [coins, setCoins] = useState<number>(100000);
   const [powerPoints, setPowerPoints] = useState<number>(100);
@@ -33,33 +46,33 @@ export default function App() {
 
   const [avatar, setAvatar] = useState<AvatarProfile>({
     name: 'SuperGuardián',
-    gender: 'hombre',
+    gender: 'heroe',
     characterId: 'richard',
-    classId: 'rey-fuego',
+    classId: 'rey-agua',
     suitId: 'eco-ranger',
-    primaryColor: '#f97316',
-    secondaryColor: '#ea580c',
-    equippedTool: 'Cañón Purificador',
-    bio: 'Guardián de los Buenos Hábitos',
+    primaryColor: '#06b6d4',
+    secondaryColor: '#0284c7',
+    equippedTool: 'Cañón de Agua Purificadora',
+    bio: 'Guardián de los Buenos Hábitos en Medellín y Colombia',
   });
 
   const [mechConfig, setMechConfig] = useState<MechConfiguration>({
     id: 'mech_01',
-    name: 'IronMech Guardián MK-I',
+    name: 'HidroBot Medellín MK-I',
     chassis: 'ironman',
-    primaryColor: '#ef4444',
+    primaryColor: '#06b6d4',
     accentColor: '#f59e0b',
-    reactorColor: '#06b6d4',
+    reactorColor: '#10b981',
     programmedBlocks: [
       INITIAL_LOGIC_BLOCKS[0],
       INITIAL_LOGIC_BLOCKS[4],
       INITIAL_LOGIC_BLOCKS[5],
     ],
     stats: {
-      firepower: 150,
-      shield: 120,
-      agility: 100,
-      habitEnergy: 90,
+      firepower: 160,
+      shield: 130,
+      agility: 110,
+      habitEnergy: 95,
     },
   });
 
@@ -68,7 +81,8 @@ export default function App() {
   // Load saved state
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved =
+        localStorage.getItem(STORAGE_KEY) || localStorage.getItem('history_game_save_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.playerName) setPlayerName(parsed.playerName);
@@ -80,7 +94,12 @@ export default function App() {
         if (parsed.completedLevels !== undefined)
           setCompletedLevels(parsed.completedLevels);
         if (parsed.playerMedals !== undefined) setPlayerMedals(parsed.playerMedals);
-        if (parsed.avatar) setAvatar(parsed.avatar);
+        if (parsed.avatar) {
+          const a = parsed.avatar;
+          if (a.gender === 'mujer') a.gender = 'heroina';
+          else if (a.gender !== 'heroina' && a.gender !== 'heroe') a.gender = 'heroe';
+          setAvatar(a);
+        }
         if (parsed.mechConfig) setMechConfig(parsed.mechConfig);
         if (parsed.currentTeam) setCurrentTeam(parsed.currentTeam);
       }
@@ -121,46 +140,30 @@ export default function App() {
     currentTeam,
   ]);
 
-  // Handle level completion & auto-certify with Referee on Public Server
-  const handleLevelComplete = async (
-    levelId: number,
-    rewardedCoins: number,
-    rewardedPower: number,
-    medal: string
-  ) => {
-    const nextCoins = coins + rewardedCoins;
-    const nextLevelMax = Math.max(unlockedLevelMax, Math.min(15, levelId + 1));
-    const nextGreenCards = greenCards + 3;
-    const nextMedals =
-      medal && !playerMedals.includes(medal)
-        ? [...playerMedals, medal]
-        : playerMedals;
+  const handleLevelComplete = useCallback(
+    (levelId: number, rewardedCoins: number, rewardedPower: number, medal: string) => {
+      setCoins((c) => c + rewardedCoins);
+      setPowerPoints((p) => p + rewardedPower);
+      setGreenCards((g) => g + 3);
+      setCompletedLevels((prev) => (prev.includes(levelId) ? prev : [...prev, levelId]));
+      setUnlockedLevelMax((prev) => Math.max(prev, Math.min(15, levelId + 1)));
+      setPlayerMedals((prev) => (medal && !prev.includes(medal) ? [...prev, medal] : prev));
 
-    setCoins(nextCoins);
-    setPowerPoints((p) => p + rewardedPower);
-    setGreenCards(nextGreenCards);
-    setCompletedLevels((prev) => (prev.includes(levelId) ? prev : [...prev, levelId]));
-    setUnlockedLevelMax(nextLevelMax);
-    setPlayerMedals(nextMedals);
-
-    // Auto-submit verified score to Public Server
-    try {
-      await fetch('/api/submit-score', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      try {
+        submitScore({
           playerName,
-          heroChoice: 'richard',
-          levelReached: nextLevelMax,
-          coins: nextCoins,
-          greenCards: nextGreenCards,
-          medalsCount: nextMedals.length,
-        }),
-      });
-    } catch {
-      // Safe fallback
-    }
-  };
+          heroChoice: avatar.characterId || 'richard',
+          levelReached: Math.min(15, levelId + 1),
+          coins: coins + rewardedCoins,
+          greenCards: greenCards + 3,
+          medalsCount: playerMedals.includes(medal) ? playerMedals.length : playerMedals.length + 1,
+        });
+      } catch {
+        // Safe fallback
+      }
+    },
+    [playerName, avatar.characterId, coins, greenCards, playerMedals]
+  );
 
   const handleAddCoins = useCallback((amount: number) => {
     setCoins((c) => c + amount);
@@ -176,9 +179,12 @@ export default function App() {
     setSoundEnabled(next);
   };
 
+  const currentHeroId = avatar.characterId || 'richard';
+  const nextLevelToPlay =
+    ALL_LEVELS.find((l) => l.id === unlockedLevelMax) || ALL_LEVELS[0];
+
   return (
-    <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30">
-      {/* CLEAN TOP BAR */}
+    <div className="min-h-screen text-slate-800 flex flex-col font-sans">
       <HeaderNav
         currentTab={activeTab}
         onSelectTab={(tab) => {
@@ -192,151 +198,175 @@ export default function App() {
       />
 
       {/* MAIN VIEWPORT */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 py-4 flex flex-col">
-        {activeGameLevel ? (
-          <ThreeGameArena
-            level={activeGameLevel}
-            playerCoins={coins}
-            onAddCoins={handleAddCoins}
-            onAddGreenCard={handleAddGreenCard}
-            avatar={avatar}
-            onLevelComplete={handleLevelComplete}
-            onExitArena={() => setActiveGameLevel(null)}
-          />
-        ) : (
-          <>
-            {/* ULTRA-CLEAN KID-FRIENDLY CONSOLE BANNER (Only on Levels tab) */}
-            {activeTab === 'levels' && (
-              <div className="rounded-3xl border-2 border-slate-800 bg-gradient-to-r from-slate-900 via-slate-900 to-cyan-950/60 p-5 sm:p-6 mb-6 shadow-2xl flex flex-col lg:flex-row items-center justify-between gap-6">
-                {/* Left: Play Now + Referee Badge */}
-                <div className="flex flex-col sm:flex-row items-center gap-5 text-center sm:text-left">
-                  <div
-                    onClick={() => soundEffects.playClickSound()}
-                    className="relative cursor-pointer hover:scale-105 transition-transform shrink-0"
-                    title="Árbitro Oficial Don Justo"
-                  >
-                    <Referee3DPortrait size={92} />
-                    <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 text-[10px] font-black px-2.5 py-0.5 rounded-full shadow flex items-center gap-1 whitespace-nowrap">
-                      <Volume2 className="w-3 h-3" /> ÁRBITRO 3D
-                    </span>
-                  </div>
+      <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 flex flex-col">
+        <Suspense
+          fallback={<LoadingScreen label={activeGameLevel ? 'Cargando el escenario 3D…' : 'Cargando…'} />}
+        >
+          {activeGameLevel ? (
+            <ThreeGameArena
+              level={activeGameLevel}
+              playerCoins={coins}
+              onAddCoins={handleAddCoins}
+              onAddGreenCard={handleAddGreenCard}
+              avatar={avatar}
+              onLevelComplete={handleLevelComplete}
+              onExitArena={() => setActiveGameLevel(null)}
+            />
+          ) : (
+            <>
+              {/* EDITORIAL HERO SECTION (Only on Levels Tab) */}
+              {activeTab === 'levels' && (
+                <section className="relative rounded-3xl p-6 sm:p-8 mb-8 glass-panel overflow-hidden">
+                  {/* Subtle decorative glow */}
+                  <div className="absolute top-0 right-0 w-80 h-80 bg-gradient-to-br from-sky-400/10 via-emerald-400/10 to-transparent rounded-full blur-3xl pointer-events-none" />
 
-                  <div>
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs font-black mb-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                      SERVIDOR PÚBLICO LISTO · 60 FPS
+                  <div className="relative z-10 flex flex-col lg:flex-row items-center justify-between gap-6">
+                    <div className="flex-1 text-center lg:text-left max-w-2xl">
+                      {/* Eyebrow badge */}
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/5 border border-slate-900/10 text-slate-700 text-xs font-semibold mb-3">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>Medellín & Colombia · 15 Capítulos</span>
+                      </div>
+
+                      <h1 className="text-2xl sm:text-3xl lg:text-4xl font-heading font-extrabold text-slate-900 tracking-tight leading-tight">
+                        La aventura de tus buenos hábitos en cada etapa de la vida
+                      </h1>
+
+                      <p className="text-sm text-slate-500 font-normal mt-2 leading-relaxed max-w-xl">
+                        Frena al <strong>Basurote</strong> y a los <strong>Taladores</strong> con tu Cañón de Agua, cultiva huertas solidarias y vive con <strong>Cero Violencia</strong>.
+                      </p>
+
+                      {/* Primary CTA and Hero quick toggle */}
+                      <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3 mt-5">
+                        <button
+                          onClick={() => {
+                            soundEffects.playClickSound();
+                            setActiveGameLevel(nextLevelToPlay);
+                          }}
+                          className="px-6 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-heading font-bold text-xs uppercase tracking-wider shadow-sm hover:shadow-md transition-all active:scale-[0.98] flex items-center gap-2"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Jugar Capítulo {unlockedLevelMax}</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            soundEffects.playSwitchHeroSound();
+                            setAvatar((prev) => ({
+                              ...prev,
+                              characterId: prev.characterId === 'richard' ? 'juan' : 'richard',
+                            }));
+                          }}
+                          className="px-4 py-3 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200/80 font-heading font-semibold text-xs transition-all active:scale-[0.98] flex items-center gap-2"
+                          title="Alternar héroe activo"
+                        >
+                          <span>Héroe:</span>
+                          <span className="font-bold text-slate-900">
+                            {currentHeroId === 'richard' ? 'Richard (Naranja)' : 'Juan (Verde)'}
+                          </span>
+                        </button>
+                      </div>
                     </div>
-                    <h1 className="text-2xl sm:text-3xl font-heading font-black text-white">
-                      ¡ELIGE TU NIVEL Y SALVA EL MUNDO!
-                    </h1>
-                    <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 mt-4">
-                      <button
-                        onClick={() => {
-                          soundEffects.playClickSound();
-                          const nextLevel =
-                            ALL_LEVELS.find((l) => l.id === unlockedLevelMax) ||
-                            ALL_LEVELS[0];
-                          setActiveGameLevel(nextLevel);
-                        }}
-                        className="px-6 py-3.5 bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 active:scale-95 text-slate-950 font-heading font-black text-sm rounded-2xl shadow-xl flex items-center gap-2"
-                      >
-                        <Play className="w-5 h-5 fill-slate-950" />
-                        <span>¡JUGAR NIVEL #{unlockedLevelMax} AHORA!</span>
-                      </button>
 
-                      <button
+                    {/* Minimalist interactive character spotlight */}
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div
                         onClick={() => {
-                          soundEffects.playClickSound();
-                          setActiveTab('server');
+                          soundEffects.playSwitchHeroSound();
+                          setAvatar((prev) => ({ ...prev, characterId: 'richard' }));
                         }}
-                        className="px-5 py-3.5 bg-amber-400/20 hover:bg-amber-400/30 border-2 border-amber-400/60 text-amber-300 font-heading font-black text-xs rounded-2xl flex items-center gap-2 transition-all"
+                        className={`cursor-pointer p-3 rounded-2xl transition-all border ${
+                          currentHeroId === 'richard'
+                            ? 'bg-white border-orange-300 shadow-md scale-105'
+                            : 'bg-white/40 border-slate-200/60 opacity-60 hover:opacity-100'
+                        }`}
+                        title="Seleccionar a Richard"
                       >
-                        <Trophy className="w-4 h-4" />
-                        <span>RANKING PÚBLICO</span>
-                      </button>
+                        <Hero3DPortrait heroId="richard" size={68} muscleLevel={unlockedLevelMax} />
+                        <span className="text-[11px] font-bold text-center block mt-1.5 text-orange-600">
+                          Richard
+                        </span>
+                      </div>
+
+                      <div
+                        onClick={() => {
+                          soundEffects.playSwitchHeroSound();
+                          setAvatar((prev) => ({ ...prev, characterId: 'juan' }));
+                        }}
+                        className={`cursor-pointer p-3 rounded-2xl transition-all border ${
+                          currentHeroId === 'juan'
+                            ? 'bg-white border-emerald-300 shadow-md scale-105'
+                            : 'bg-white/40 border-slate-200/60 opacity-60 hover:opacity-100'
+                        }`}
+                        title="Seleccionar a Juan"
+                      >
+                        <Hero3DPortrait heroId="juan" size={68} muscleLevel={unlockedLevelMax} />
+                        <span className="text-[11px] font-bold text-center block mt-1.5 text-emerald-600">
+                          Juan
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
+                </section>
+              )}
 
-                {/* Right: Richard & Juan Visual Cards */}
-                <div className="flex items-center gap-3 shrink-0">
-                  <div className="bg-slate-950/90 border-2 border-orange-500/50 rounded-2xl p-3 flex flex-col items-center">
-                    <Hero3DPortrait
-                      heroId="richard"
-                      size={68}
-                      muscleLevel={unlockedLevelMax}
-                    />
-                    <span className="font-heading font-black text-xs text-orange-400 mt-1.5">
-                      RICHARD
-                    </span>
-                  </div>
+              {activeTab === 'levels' && (
+                <LevelSelector
+                  unlockedLevelMax={unlockedLevelMax}
+                  completedLevels={completedLevels}
+                  onSelectLevel={(lvl) => setActiveGameLevel(lvl)}
+                />
+              )}
 
-                  <div className="bg-slate-950/90 border-2 border-emerald-500/50 rounded-2xl p-3 flex flex-col items-center">
-                    <Hero3DPortrait
-                      heroId="juan"
-                      size={68}
-                      muscleLevel={unlockedLevelMax}
-                    />
-                    <span className="font-heading font-black text-xs text-emerald-400 mt-1.5">
-                      JUAN
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
+              {activeTab === 'server' && (
+                <PublicServerLobby
+                  playerName={playerName}
+                  onChangePlayerName={setPlayerName}
+                  unlockedLevelMax={unlockedLevelMax}
+                  coins={coins}
+                  greenCards={greenCards}
+                  medalsCount={playerMedals.length}
+                />
+              )}
 
-            {/* ACTIVE TAB VIEW */}
-            {activeTab === 'levels' && (
-              <LevelSelector
-                unlockedLevelMax={unlockedLevelMax}
-                completedLevels={completedLevels}
-                onSelectLevel={(lvl) => setActiveGameLevel(lvl)}
-              />
-            )}
+              {activeTab === 'avatar' && (
+                <AvatarCustomizer
+                  avatar={avatar}
+                  playerPower={powerPoints}
+                  onSaveAvatar={(updated) => {
+                    setAvatar(updated);
+                    if (updated.name) setPlayerName(updated.name);
+                  }}
+                  onClose={() => setActiveTab('levels')}
+                />
+              )}
 
-            {activeTab === 'server' && (
-              <PublicServerLobby
-                playerName={playerName}
-                onChangePlayerName={setPlayerName}
-                unlockedLevelMax={unlockedLevelMax}
-                coins={coins}
-                greenCards={greenCards}
-                medalsCount={playerMedals.length}
-              />
-            )}
+              {activeTab === 'mech' && (
+                <MechProgrammingStudio
+                  mechConfig={mechConfig}
+                  playerPower={powerPoints}
+                  onSaveMech={(updated: MechConfiguration) => setMechConfig(updated)}
+                  onClose={() => setActiveTab('levels')}
+                />
+              )}
 
-            {activeTab === 'avatar' && (
-              <AvatarCustomizer
-                avatar={avatar}
-                playerPower={powerPoints}
-                onSaveAvatar={(updated) => {
-                  setAvatar(updated);
-                  if (updated.name) setPlayerName(updated.name);
-                }}
-                onClose={() => setActiveTab('levels')}
-              />
-            )}
-
-            {activeTab === 'mech' && (
-              <MechProgrammingStudio
-                mechConfig={mechConfig}
-                playerPower={powerPoints}
-                onSaveMech={(updated: MechConfiguration) => setMechConfig(updated)}
-                onClose={() => setActiveTab('levels')}
-              />
-            )}
-
-            {activeTab === 'teams' && (
-              <TeamsCodex
-                currentTeam={currentTeam}
-                playerMedals={playerMedals}
-                onUpdateTeam={(team: TeamSquad) => setCurrentTeam(team)}
-                onClose={() => setActiveTab('levels')}
-              />
-            )}
-          </>
-        )}
+              {activeTab === 'teams' && (
+                <TeamsCodex
+                  currentTeam={currentTeam}
+                  playerMedals={playerMedals}
+                  onUpdateTeam={(team: TeamSquad) => setCurrentTeam(team)}
+                  onClose={() => setActiveTab('levels')}
+                />
+              )}
+            </>
+          )}
+        </Suspense>
       </main>
+
+      {/* Clean minimal footer */}
+      <footer className="py-6 text-center text-xs text-slate-400 font-medium">
+        <p>Story Game · Medellín & Colombia · Cero Basura, No Tala, Cero Violencia y Cero Hambre.</p>
+      </footer>
     </div>
   );
-};
+}

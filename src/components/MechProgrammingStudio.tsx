@@ -9,9 +9,7 @@ import {
   Play,
   Trash2,
   Plus,
-  Shield,
   Layers,
-  Sparkles,
   RotateCw,
   Sliders,
   CheckCircle2,
@@ -34,7 +32,7 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
   const [selectedBlockCategory, setSelectedBlockCategory] = useState<'all' | 'trigger' | 'condition' | 'action'>('all');
   const [simRunning, setSimRunning] = useState<boolean>(false);
   const [simLogs, setSimLogs] = useState<string[]>([
-    'Núcleo Arc Reactor en línea. Esperando inicio de simulación de algoritmos...',
+    'Núcleo listo. Pulsa "Probar" para ver a tu robot en acción.',
   ]);
   const [simBossHp, setSimBossHp] = useState<number>(1000);
 
@@ -57,7 +55,7 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     const height = container.clientHeight || 320;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0f1d);
+    scene.background = new THREE.Color(0x0e2a47);
 
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
     camera.position.set(0, 2.2, 5.2);
@@ -65,7 +63,7 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     renderer.shadowMap.enabled = true;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
@@ -83,7 +81,7 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     resizeObserver.observe(container);
 
     // Studio Lighting
-    const amb = new THREE.AmbientLight(0xffffff, 0.7);
+    const amb = new THREE.AmbientLight(0xffffff, 0.8);
     scene.add(amb);
 
     const key = new THREE.DirectionalLight(0xfff5eb, 1.5);
@@ -97,7 +95,7 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
 
     // Glowing Circular Platform
     const platGeo = new THREE.CylinderGeometry(1.8, 2.0, 0.2, 32);
-    const platMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8, roughness: 0.2 });
+    const platMat = new THREE.MeshStandardMaterial({ color: 0x1e3a5f, metalness: 0.7, roughness: 0.25 });
     const platform = new THREE.Mesh(platGeo, platMat);
     platform.position.y = -0.1;
     scene.add(platform);
@@ -112,7 +110,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     // BUILD 3D IRONMECH
     const mechGroup = new THREE.Group();
 
-    // Torso (Heavy Chiseled Armor)
     const isIronWoman = mech.chassis === 'ironwoman';
     const torsoW = isIronWoman ? 1.0 : 1.3;
     const torsoGeo = new THREE.BoxGeometry(torsoW, 1.3, 0.7);
@@ -126,7 +123,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     torso.castShadow = true;
     mechGroup.add(torso);
 
-    // Arc Reactor Core (Glowing Repulsor Heart)
     const reactorGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.12, 24);
     const reactorMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(mech.reactorColor),
@@ -138,7 +134,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     reactorMesh.position.set(0, 1.5, 0.36);
     mechGroup.add(reactorMesh);
 
-    // Iron Helmet
     const headGeo = new THREE.BoxGeometry(0.6, 0.65, 0.6);
     const headMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(mech.accentColor),
@@ -149,7 +144,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     head.position.y = 2.3;
     mechGroup.add(head);
 
-    // Slanted Eye Slits (Visor)
     const eyeGeo = new THREE.BoxGeometry(0.44, 0.1, 0.15);
     const eyeMat = new THREE.MeshStandardMaterial({
       color: 0x38bdf8,
@@ -160,7 +154,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     eyes.position.set(0, 2.32, 0.3);
     mechGroup.add(eyes);
 
-    // Shoulder Guards
     const shoulderGeo = new THREE.BoxGeometry(0.5, 0.4, 0.6);
     const shoulderMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(mech.accentColor) });
     const shoulderL = new THREE.Mesh(shoulderGeo, shoulderMat);
@@ -170,7 +163,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     shoulderR.position.set(torsoW / 2 + 0.3, 1.9, 0);
     mechGroup.add(shoulderR);
 
-    // Forearms with Repulsors
     const armGeo = new THREE.BoxGeometry(0.32, 0.9, 0.35);
     const armMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(mech.primaryColor), metalness: 0.8 });
     const armL = new THREE.Mesh(armGeo, armMat);
@@ -180,7 +172,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     armR.position.set(torsoW / 2 + 0.3, 1.3, 0);
     mechGroup.add(armR);
 
-    // Thruster Wings
     const wingGeo = new THREE.BoxGeometry(0.2, 1.1, 0.4);
     const wingMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.9 });
     const wingL = new THREE.Mesh(wingGeo, wingMat);
@@ -192,7 +183,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     wingR.rotation.z = -0.2;
     mechGroup.add(wingR);
 
-    // Legs
     const legGeo = new THREE.BoxGeometry(0.4, 0.9, 0.45);
     const legMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(mech.accentColor), metalness: 0.8 });
     const legL = new THREE.Mesh(legGeo, legMat);
@@ -205,19 +195,15 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     scene.add(mechGroup);
 
     let animId = 0;
-    let clock = new THREE.Clock();
+    const clock = new THREE.Clock();
 
     const animate = () => {
       animId = requestAnimationFrame(animate);
       const elapsed = clock.getElapsedTime();
-
-      // Gentle rotation and dynamic engine pulse
       mechGroup.rotation.y = elapsed * 0.35;
       mechGroup.position.y = Math.sin(elapsed * 2) * 0.04;
-
       const pulse = 1.8 + Math.sin(elapsed * 6) * 0.6;
       (reactorMesh.material as THREE.MeshStandardMaterial).emissiveIntensity = pulse;
-
       renderer.render(scene, camera);
     };
 
@@ -247,7 +233,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     soundEffects.playClickSound();
     setMech((prev) => {
       const nextBlocks = [...prev.programmedBlocks, block];
-      // Recalculate stats
       const firepower = 50 + nextBlocks.reduce((acc, b) => acc + (b.category === 'action' ? b.powerRating : 5), 0);
       const shield = 40 + nextBlocks.reduce((acc, b) => acc + (b.category === 'condition' ? b.powerRating : 10), 0);
       const habitEnergy = 100 - nextBlocks.reduce((acc, b) => acc + b.energyCost, 0);
@@ -265,7 +250,6 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     });
   };
 
-  // Remove block from chain
   const handleRemoveBlock = (index: number) => {
     soundEffects.playClickSound();
     setMech((prev) => {
@@ -290,7 +274,7 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
   // Run Test Simulation
   const handleRunSimulation = () => {
     if (mech.programmedBlocks.length === 0) {
-      setSimLogs(['Error: Programa al menos un bloque de acción o disparador antes de simular.']);
+      setSimLogs(['Error: Añade al menos un bloque antes de probar.']);
       return;
     }
 
@@ -298,30 +282,30 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
     setSimBossHp(1000);
     soundEffects.playLaserSound();
 
-    const newLogs: string[] = ['[INICIANDO SIMULACIÓN DE COMBATE IRONMECH]'];
+    const newLogs: string[] = ['[Probando a tu robot…]'];
     let currentHp = 1000;
 
     mech.programmedBlocks.forEach((block, idx) => {
       setTimeout(() => {
         if (block.category === 'trigger') {
           soundEffects.playClickSound();
-          newLogs.push(`⏱️ [TRIGGER]: ${block.label} -> Condición satisfecha`);
+          newLogs.push(`⏱️ [Sensor]: ${block.label} -> ¡Activado!`);
         } else if (block.category === 'condition') {
           soundEffects.playDashSound();
-          newLogs.push(`⚡ [EVAL]: Verificando estado: ${block.label} -> POSITIVO`);
+          newLogs.push(`⚡ [Pregunta]: ${block.label} -> ¡Sí!`);
         } else if (block.category === 'action') {
           soundEffects.playAttackSound();
           const dmg = block.powerRating * 3;
           currentHp = Math.max(0, currentHp - dmg);
           setSimBossHp(currentHp);
-          newLogs.push(`💥 [ACCIÓN]: ${block.label} ejecutada con éxito. Daño infligido: -${dmg} HP`);
+          newLogs.push(`💥 [Poder]: ${block.label}. Daño: -${dmg} HP`);
         }
         setSimLogs([...newLogs]);
 
         if (idx === mech.programmedBlocks.length - 1) {
           setTimeout(() => {
             soundEffects.playVictoryFanfare();
-            newLogs.push(`🎉 [VICTORIA DE PRUEBA]: Algoritmo de combate completado. Villano de prueba derrotado.`);
+            newLogs.push(`🎉 ¡Tu robot ganó la prueba!`);
             setSimLogs([...newLogs]);
             setSimRunning(false);
           }, 600);
@@ -336,23 +320,26 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
   });
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-6xl w-full mx-auto shadow-2xl animate-in fade-in duration-200">
+    <div className="glass-panel rounded-3xl p-6 sm:p-8 max-w-6xl w-full mx-auto shadow-2xl relative overflow-hidden">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-4 mb-6 gap-4">
+      <div className="flex flex-wrap items-center justify-between border-b border-sky-100/70 pb-4 mb-6 gap-4">
         <div>
-          <h2 className="text-xl font-heading font-bold text-white flex items-center gap-2">
-            <Cpu className="w-5 h-5 text-amber-400" />
-            <span>ESTUDIO DE PROGRAMACIÓN & FORJA IRONMECH</span>
+          <span className="text-[10px] font-bold tracking-widest text-violet-600 uppercase">
+            Laboratorio de Lógica & Robótica
+          </span>
+          <h2 className="text-xl sm:text-2xl font-heading font-extrabold text-slate-900 flex items-center gap-2 mt-0.5">
+            <Cpu className="w-5 h-5 text-violet-500" />
+            <span>Taller de Robots Comunitarios</span>
           </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Crea y programa algoritmos tácticos para tu IronMan o IronWoman con nodos lógicos de IA.
+          <p className="text-xs text-slate-500 mt-0.5">
+            Programa bloques de lógica para automatizar reciclaje y protección ecológica.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <button
             onClick={onClose}
-            className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 transition-colors"
+            className="text-xs font-semibold text-slate-600 hover:text-slate-900 px-4 py-2 rounded-xl bg-white/70 hover:bg-white border border-slate-200 transition-all shadow-sm"
           >
             Cerrar
           </button>
@@ -362,10 +349,10 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
               onSaveMech(mech);
               onClose();
             }}
-            className="text-xs font-bold text-slate-950 px-4 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 transition-all flex items-center gap-1.5 shadow-md"
+            className="text-xs font-bold text-white px-5 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 transition-all flex items-center gap-1.5 shadow-md shadow-violet-500/20 active:scale-95"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>Guardar IronMech</span>
+            <span>Guardar Configuración</span>
           </button>
         </div>
       </div>
@@ -373,144 +360,129 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* 3D Visualizer & Chassis Column */}
         <div className="lg:col-span-4 flex flex-col gap-4">
-          <div className="relative w-full h-[320px] rounded-2xl overflow-hidden border border-slate-700 bg-slate-950 shadow-inner flex items-center justify-center">
+          <div className="relative w-full h-[300px] rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-900 shadow-inner flex items-center justify-center">
             <div ref={mountRef} className="w-full h-full" />
-            <div className="absolute top-3 left-3 bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-700 text-[10px] text-amber-400 font-mono flex items-center gap-1.5 pointer-events-none">
-              <Zap className="w-3 h-3 text-cyan-400" />
-              <span>Reactor Arc: Activo</span>
+            <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/60 text-[10px] text-violet-700 font-bold flex items-center gap-1.5 pointer-events-none shadow-sm">
+              <Zap className="w-3 h-3 text-amber-500" />
+              <span>Reactor: En Línea</span>
             </div>
           </div>
 
-          {/* Chassis Selection (IronMan vs IronWoman) */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
-            <label className="text-xs font-semibold text-slate-300 block mb-2 uppercase tracking-wider">
-              Chasis Robótico
+          <div className="bg-white/70 backdrop-blur-sm border border-slate-200/70 rounded-2xl p-4">
+            <label className="text-[11px] font-bold text-slate-400 block mb-2 uppercase tracking-wider">
+              Chasis del Guardián
             </label>
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => {
                   soundEffects.playClickSound();
-                  setMech({ ...mech, chassis: 'ironman', name: 'IronMan Titan MK-VII' });
+                  setMech({ ...mech, chassis: 'ironman', name: 'Robot Titán' });
                 }}
-                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
+                className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${
                   mech.chassis === 'ironman'
-                    ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    ? 'bg-violet-50 border-violet-400 text-violet-700 shadow-sm'
+                    : 'bg-white/80 border-slate-200 text-slate-500 hover:text-slate-800'
                 }`}
               >
-                IronMan Titan
+                🤖 Titán Ecológico
               </button>
               <button
                 onClick={() => {
                   soundEffects.playClickSound();
-                  setMech({ ...mech, chassis: 'ironwoman', name: 'IronWoman Valkyrie MK-IX' });
+                  setMech({ ...mech, chassis: 'ironwoman', name: 'Robot Valquiria' });
                 }}
-                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
+                className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${
                   mech.chassis === 'ironwoman'
-                    ? 'bg-rose-500/20 border-rose-400 text-rose-300'
-                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    ? 'bg-rose-50 border-rose-400 text-rose-700 shadow-sm'
+                    : 'bg-white/80 border-slate-200 text-slate-500 hover:text-slate-800'
                 }`}
               >
-                IronWoman Valkyrie
+                🦾 Valquiria Verde
               </button>
             </div>
           </div>
 
-          {/* Mech Stats Breakdown */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 flex flex-col gap-2">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              Métricas del Algoritmo
+          <div className="bg-white/70 backdrop-blur-sm border border-slate-200/70 rounded-2xl p-4 flex flex-col gap-2.5">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+              Estadísticas de Soporte
             </span>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <div>
-                <div className="flex justify-between text-xs text-slate-300 mb-0.5">
-                  <span>Poder de Fuego</span>
-                  <span className="text-amber-400 font-mono font-bold">{mech.stats.firepower} ⚡</span>
+                <div className="flex justify-between text-xs text-slate-600 mb-1">
+                  <span className="font-medium">Potencia Hídrica</span>
+                  <span className="text-sky-600 font-bold">{mech.stats.firepower} 💧</span>
                 </div>
-                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-amber-400 transition-all"
-                    style={{ width: `${Math.min(100, mech.stats.firepower / 2)}%` }}
-                  />
+                <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-sky-400 to-indigo-500 transition-all rounded-full" style={{ width: `${Math.min(100, mech.stats.firepower / 2)}%` }} />
                 </div>
               </div>
 
               <div>
-                <div className="flex justify-between text-xs text-slate-300 mb-0.5">
-                  <span>Escudo Nanotecnológico</span>
-                  <span className="text-cyan-400 font-mono font-bold">{mech.stats.shield} 🛡️</span>
+                <div className="flex justify-between text-xs text-slate-600 mb-1">
+                  <span className="font-medium">Blindaje Comunitario</span>
+                  <span className="text-emerald-600 font-bold">{mech.stats.shield} 🛡️</span>
                 </div>
-                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-cyan-400 transition-all"
-                    style={{ width: `${Math.min(100, mech.stats.shield / 2)}%` }}
-                  />
+                <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all rounded-full" style={{ width: `${Math.min(100, mech.stats.shield / 2)}%` }} />
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* LOGIC BLOCKS PROGRAMMING WORKSPACE */}
-        <div className="lg:col-span-8 flex flex-col gap-5">
-          {/* Programmed Sequence Pipeline */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4">
+        {/* LOGIC BLOCKS WORKSPACE */}
+        <div className="lg:col-span-8 flex flex-col gap-4">
+          <div className="bg-white/70 backdrop-blur-sm border border-slate-200/70 rounded-2xl p-4 sm:p-5">
             <div className="flex justify-between items-center mb-3">
               <div className="flex items-center gap-2">
-                <Layers className="w-4 h-4 text-cyan-400" />
-                <span className="text-xs font-semibold text-slate-200 uppercase tracking-wider">
-                  Cadena Lógica Programada ({mech.programmedBlocks.length} Nodos)
+                <Layers className="w-4 h-4 text-sky-500" />
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Algoritmo Activo ({mech.programmedBlocks.length} instrucciones)
                 </span>
               </div>
               <button
                 onClick={handleRunSimulation}
                 disabled={simRunning}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-md transition-all flex items-center gap-1.5"
+                className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center gap-1.5 active:scale-95"
               >
-                <Play className="w-3.5 h-3.5" />
-                <span>{simRunning ? 'Simulando...' : 'Probar en Combate'}</span>
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>{simRunning ? 'Simulando…' : 'Ejecutar'}</span>
               </button>
             </div>
 
             {mech.programmedBlocks.length === 0 ? (
-              <div className="py-8 text-center border border-dashed border-slate-800 rounded-xl">
-                <Sliders className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                <p className="text-xs text-slate-400">
-                  Tu IronMech aún no tiene módulos programados. Añade bloques desde la paleta inferior.
+              <div className="py-8 text-center border-2 border-dashed border-slate-200 rounded-2xl">
+                <Sliders className="w-7 h-7 text-slate-300 mx-auto mb-2" />
+                <p className="text-xs text-slate-500">
+                  El robot no tiene instrucciones. Añade bloques desde el panel inferior.
                 </p>
               </div>
             ) : (
-              <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto pr-1">
+              <div className="flex flex-col gap-2 max-h-[200px] overflow-y-auto pr-1">
                 {mech.programmedBlocks.map((block, idx) => (
                   <div
                     key={`${block.id}-${idx}`}
-                    className="flex items-center justify-between p-2.5 rounded-lg border border-slate-800 bg-slate-900/90 text-xs gap-3 animate-in fade-in"
+                    className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200/70 bg-white/90 text-xs gap-3 shadow-xs"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="w-5 h-5 rounded-md bg-slate-800 text-slate-400 flex items-center justify-center font-mono text-[10px] shrink-0">
+                      <span className="w-5 h-5 rounded-md bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-[10px] shrink-0">
                         {idx + 1}
                       </span>
                       <span
-                        className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase shrink-0"
-                        style={{ backgroundColor: `${block.color}25`, color: block.color }}
+                        className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase shrink-0"
+                        style={{ backgroundColor: `${block.color}15`, color: block.color }}
                       >
-                        {block.category === 'trigger'
-                          ? 'Sensor'
-                          : block.category === 'condition'
-                          ? 'Condición'
-                          : 'Poder/Combo'}
+                        {block.category === 'trigger' ? 'Sensor' : block.category === 'condition' ? 'Condición' : 'Acción'}
                       </span>
-                      <span className="text-slate-200 font-medium truncate">{block.label}</span>
+                      <span className="text-slate-800 font-semibold truncate">{block.label}</span>
                     </div>
 
                     <div className="flex items-center gap-3 shrink-0">
-                      <span className="text-[11px] text-amber-400 font-mono font-semibold">
-                        +{block.powerRating}⚡
-                      </span>
+                      <span className="text-[11px] text-amber-600 font-bold">+{block.powerRating}⚡</span>
                       <button
                         onClick={() => handleRemoveBlock(idx)}
-                        className="text-slate-500 hover:text-rose-400 transition-colors p-1"
-                        title="Eliminar nodo"
+                        className="text-slate-400 hover:text-rose-500 transition-colors p-1"
+                        title="Quitar bloque"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -521,72 +493,62 @@ export const MechProgrammingStudio: React.FC<MechProgrammingStudioProps> = ({
             )}
           </div>
 
-          {/* PALETTE OF BLOCKS TO ADD */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold text-slate-200 uppercase tracking-wider">
-                Paleta de Módulos & Poderes
+          <div className="bg-white/70 backdrop-blur-sm border border-slate-200/70 rounded-2xl p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Librería de Instrucciones
               </span>
-              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800">
+              <div className="flex items-center gap-1 bg-slate-100/80 p-0.5 rounded-xl border border-slate-200/50">
                 {(['all', 'trigger', 'condition', 'action'] as const).map((cat) => (
                   <button
                     key={cat}
                     onClick={() => setSelectedBlockCategory(cat)}
-                    className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
-                      selectedBlockCategory === cat ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-white'
+                    className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all ${
+                      selectedBlockCategory === cat ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
-                    {cat === 'all'
-                      ? 'Todos'
-                      : cat === 'trigger'
-                      ? 'Sensores'
-                      : cat === 'condition'
-                      ? 'Condiciones'
-                      : 'Combos'}
+                    {cat === 'all' ? 'Todos' : cat === 'trigger' ? 'Sensores' : cat === 'condition' ? 'Condición' : 'Acciones'}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[220px] overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[200px] overflow-y-auto pr-1">
               {filteredBlocks.map((block) => (
                 <div
                   key={block.id}
-                  className="p-2.5 rounded-lg border border-slate-800 bg-slate-900/60 hover:border-slate-700 transition-all flex flex-col justify-between gap-1.5"
+                  className="p-3 rounded-xl border border-slate-200/80 bg-white hover:border-violet-300 transition-all flex flex-col justify-between gap-1.5 shadow-xs"
                 >
                   <div className="flex items-center justify-between">
                     <span
-                      className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded"
-                      style={{ backgroundColor: `${block.color}20`, color: block.color }}
+                      className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md"
+                      style={{ backgroundColor: `${block.color}15`, color: block.color }}
                     >
-                      {block.category}
+                      {block.category === 'trigger' ? 'Sensor' : block.category === 'condition' ? 'Condición' : 'Acción'}
                     </span>
                     <button
                       onClick={() => handleAddBlock(block)}
-                      className="px-2 py-1 bg-cyan-600/30 hover:bg-cyan-600 text-cyan-300 hover:text-white rounded text-[11px] font-semibold transition-all flex items-center gap-1"
+                      className="px-2 py-0.5 bg-slate-100 hover:bg-violet-600 text-slate-700 hover:text-white rounded-lg text-[11px] font-bold transition-all flex items-center gap-1"
                     >
                       <Plus className="w-3 h-3" />
-                      <span>Insertar</span>
+                      <span>Añadir</span>
                     </button>
                   </div>
 
-                  <p className="text-xs font-medium text-slate-200 line-clamp-1">{block.label}</p>
+                  <p className="text-xs font-semibold text-slate-800 line-clamp-1">{block.label}</p>
                   <p className="text-[10px] text-slate-400 line-clamp-1 font-mono">{block.codeSnippet}</p>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* SIMULATION CONSOLE LOGS */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[11px] text-slate-300 max-h-[110px] overflow-y-auto">
-            <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-800 text-[10px] text-slate-500 uppercase">
-              <span>Consola de Telemetría Táctica</span>
-              <span>HP Objetivo: {simBossHp} / 1000</span>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 font-mono text-[11px] text-slate-300 max-h-[110px] overflow-y-auto">
+            <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-800 text-[10px] text-slate-400 uppercase tracking-wider">
+              <span>Terminal de Diagnóstico</span>
+              <span>Resistencia del Basurote: {simBossHp} / 1000 HP</span>
             </div>
             {simLogs.map((log, idx) => (
-              <div key={idx} className="leading-relaxed">
-                {log}
-              </div>
+              <div key={idx} className="leading-relaxed text-emerald-400">{log}</div>
             ))}
           </div>
         </div>

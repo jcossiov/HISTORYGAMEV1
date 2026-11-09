@@ -5,11 +5,20 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // Relative base so the build works on any static host and under any
+    // sub-path (e.g. https://USER.github.io/HISTORYGAMEV1/). This is required
+    // for GitHub Pages to resolve assets correctly.
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
+    },
+    build: {
+      // Slightly raise the warning limit; the 3D arena is lazy-loaded so the
+      // initial bundle stays small and fast.
+      chunkSizeWarningLimit: 700,
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

@@ -1,6 +1,6 @@
 export type TierType = 'amateur' | 'pro' | 'legendary';
 
-export type GenderType = 'hombre' | 'mujer' | 'androgino';
+export type GenderType = 'heroe' | 'heroina';
 
 export type HeroId = 'richard' | 'juan';
 
@@ -22,6 +22,17 @@ export type WeaponType =
   | 'fire_orb';
 
 export type BiomeType =
+  | 'medellin_parque'
+  | 'bosque_arvi'
+  | 'comuna_paz'
+  | 'huerta_solidaria'
+  | 'rio_medellin'
+  | 'guatape_embalse'
+  | 'paramo_andino'
+  | 'jardin_guayacanes'
+  | 'ciudad_metro'
+  | 'cumbre_colombia'
+  // Legacy compatibility aliases
   | 'oasis_egipcio'
   | 'roma_coliseo'
   | 'grecia_filosofos'
@@ -43,6 +54,20 @@ export type VillainPower =
   | 'absorcion_energia'
   | 'tormenta_oscuridad'
   | 'escudo_oscuro';
+
+export type VillainArchetype =
+  | 'basurote'
+  | 'talador'
+  | 'maton'
+  | 'acaparador'
+  | 'contaminador';
+
+export type HabitCategory =
+  | 'recoger_basura'
+  | 'no_tala'
+  | 'cero_violencia'
+  | 'cero_hambre'
+  | 'cuidado_agua';
 
 export interface HeroClass {
   id: HeroClassId;
@@ -68,7 +93,12 @@ export interface HeroClass {
 
 export interface TriviaDilemma {
   id: string;
-  category: 'cero_violencia' | 'transporte_sostenible' | 'salud_trabajo' | 'cero_hambre' | 'cuidado_agua';
+  category:
+    | 'cero_violencia'
+    | 'transporte_sostenible'
+    | 'salud_trabajo'
+    | 'cero_hambre'
+    | 'cuidado_agua';
   question: string;
   options: string[];
   correctIndex: number;
@@ -82,6 +112,9 @@ export interface HabitLevel {
   title: string;
   subtitle: string;
   theme: string;
+  habitCategory?: HabitCategory;
+  villainArchetype?: VillainArchetype;
+  locationName?: string;
   biome: BiomeType;
   historicalEra: string;
   humanLifeStory: string;
@@ -100,12 +133,23 @@ export interface HabitLevel {
   villainHp: number;
   villainColor: string;
   villainPowers: VillainPower[];
-  coinsReward: number; // 100,000 monedas base por ganar
+  coinsReward: number;
   powerReward: number;
   badgeName: string;
   badgeDescription: string;
   trivia: TriviaDilemma;
-  specialMissionType?: 'oasis_pyramids' | 'colosseum_lion_key' | 'greek_scrolls' | 'medieval_hens_castle' | 'japan_mountain_delivery' | 'standard';
+  specialMissionType?:
+    | 'stop_basurote'
+    | 'stop_loggers'
+    | 'peace_convivencia'
+    | 'zero_hunger_garden'
+    | 'clean_water_river'
+    | 'oasis_pyramids'
+    | 'colosseum_lion_key'
+    | 'greek_scrolls'
+    | 'medieval_hens_castle'
+    | 'japan_mountain_delivery'
+    | 'standard';
 }
 
 export interface HeroCharacter {

@@ -5,4 +5,8 @@ coverage/
 .DS_Store
 *.log
 .env*
-!.env.example
+.pnpm-store/
+.xdg-cache/
+.xdg-config/
+.xdg-state/
+.aistudio/

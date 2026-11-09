@@ -7,6 +7,7 @@ import {
   MovementMode,
   WeaponType,
   AvatarProfile,
+  VillainArchetype,
 } from '../types/game';
 import { HERO_DUO } from '../data/levelsData';
 import { soundEffects } from '../utils/soundEffects';
@@ -18,7 +19,6 @@ import {
 import {
   RotateCcw,
   Sparkles,
-  Award,
   ChevronRight,
   Crosshair,
   Volume2,
@@ -32,10 +32,30 @@ import {
   HelpCircle,
   CheckCircle2,
   XCircle,
-  Key,
   Heart,
   LogOut,
+  Droplets,
+  BookOpen,
+  Info,
 } from 'lucide-react';
+
+const ORB_GEOMETRY = new THREE.SphereGeometry(0.42, 12, 12);
+const WATER_DROP_GEOMETRY = new THREE.SphereGeometry(0.28, 10, 10);
+const BOMB_GEOMETRY = new THREE.DodecahedronGeometry(0.48, 0);
+const PARTICLE_GEOMETRY = new THREE.SphereGeometry(0.16, 6, 6);
+
+function disposeMeshMaterial(mesh: THREE.Object3D) {
+  mesh.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      const mat = child.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(mat)) {
+        mat.forEach((m) => m.dispose());
+      } else if (mat) {
+        mat.dispose();
+      }
+    }
+  });
+}
 
 interface ThreeGameArenaProps {
   level: HabitLevel;
@@ -49,31 +69,36 @@ interface ThreeGameArenaProps {
 
 interface CollectibleItem3D {
   mesh: THREE.Group;
+  threatGroup: THREE.Group;
+  restoredGroup: THREE.Group;
+  ringMesh: THREE.Mesh;
   collected: boolean;
   x: number;
   z: number;
-  specialType?: 'scroll' | 'chicken' | 'lion_key' | 'delivery_package' | 'oasis_canal' | 'trash';
+  kind: 'basura' | 'tala' | 'hambre' | 'violencia';
 }
 
 interface ActiveProjectile {
-  mesh: THREE.Mesh | THREE.Group;
+  mesh: THREE.Object3D;
   vx: number;
+  vy: number;
   vz: number;
   life: number;
   damage: number;
-  type: 'water' | 'light' | 'lightning' | 'fireball' | 'whirlpool' | 'dark_beam' | 'trash_bomb';
+  type: 'water' | 'light' | 'lightning' | 'fireball' | 'trash_bomb';
   isEnemy?: boolean;
 }
 
-interface TorchLight {
-  pointLight: THREE.PointLight;
-  flameMesh: THREE.Mesh;
-  baseIntensity: number;
+interface SplashParticle {
+  mesh: THREE.Mesh;
+  vx: number;
+  vy: number;
+  vz: number;
+  life: number;
 }
 
 export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
   level,
-  playerCoins = 0,
   onAddCoins = () => {},
   onAddGreenCard = () => {},
   onLevelComplete,
@@ -81,29 +106,19 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
 
-  // Stable callback refs to prevent 3D canvas re-creation on coin updates!
   const onAddCoinsRef = useRef(onAddCoins);
   onAddCoinsRef.current = onAddCoins;
   const onAddGreenCardRef = useRef(onAddGreenCard);
   onAddGreenCardRef.current = onAddGreenCard;
 
-  // Character Swap State: Richard (orange) <-> Juan (green)
   const [activeHero, setActiveHero] = useState<HeroId>('richard');
-
-  // Movement Mode & Weapon State
   const [movementMode, setMovementMode] = useState<MovementMode>('on_foot');
   const [activeWeapon, setActiveWeapon] = useState<WeaponType>('water_cannon');
 
-  // Pearls & Referee Cards
   const [pearlsTeleport, setPearlsTeleport] = useState<number>(3);
   const [pearlsSpeed, setPearlsSpeed] = useState<number>(3);
   const [matchGreenCards, setMatchGreenCards] = useState<number>(1);
 
-  // Special Mission State
-  const [hasLionKey, setHasLionKey] = useState<boolean>(false);
-  const [isLionFreed, setIsLionFreed] = useState<boolean>(false);
-
-  // Kid-friendly HUD state
   const [hudHp, setHudHp] = useState<number>(100);
   const [hudBossHp, setHudBossHp] = useState<number>(level.villainHp);
   const [hudBossShield, setHudBossShield] = useState<number>(
@@ -112,8 +127,13 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
   const [hudObjectives, setHudObjectives] = useState<number>(0);
   const [isVictory, setIsVictory] = useState<boolean>(false);
   const [isDefeat, setIsDefeat] = useState<boolean>(false);
+  const [showStoryIntro, setShowStoryIntro] = useState<boolean>(true);
   const [refereeCall, setRefereeCall] = useState<string>(
-    '¡PRIIIT! 🏁 Sigue la flecha dorada y limpia el nivel'
+    level.habitCategory === 'no_tala'
+      ? 'Usa tu Arma de Agua [K] para frenar la tala'
+      : level.habitCategory === 'recoger_basura'
+      ? 'Dispara agua [K] contra el Basurote'
+      : level.habitActionName
   );
   const [soundOn, setSoundOn] = useState<boolean>(soundEffects.enabled);
   const [showTriviaModal, setShowTriviaModal] = useState<boolean>(false);
@@ -121,34 +141,39 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
   const [triviaResult, setTriviaResult] = useState<'correct' | 'wrong' | null>(null);
   const [coinRewardToast, setCoinRewardToast] = useState<string | null>(null);
 
-  // Dynamic Muscle Scale Factor based on Level
-  const muscleScale = 1.0 + Math.min(0.85, (level.id - 1) * 0.06);
+  const muscleScale = 1.0 + Math.min(0.75, (level.id - 1) * 0.05);
 
-  // Mutable 60FPS Engine State
+  const resolvedArchetype: VillainArchetype =
+    level.villainArchetype ||
+    (level.habitCategory === 'recoger_basura'
+      ? 'basurote'
+      : level.habitCategory === 'no_tala'
+      ? 'talador'
+      : level.habitCategory === 'cero_hambre'
+      ? 'acaparador'
+      : 'maton');
+
   const engineRef = useRef({
     gameActive: true,
     activeHero: 'richard' as HeroId,
     movementMode: 'on_foot' as MovementMode,
     activeWeapon: 'water_cannon' as WeaponType,
-    heroPos: { x: 0, y: 0, z: 8 },
-    heroRot: 0,
+    heroPos: { x: 0, y: 0, z: 9 },
+    heroRot: Math.PI,
     carSpeed: 0,
     isNitroBoost: false,
     nitroTimer: 0,
     isShieldActive: false,
     shieldTimer: 0,
     heroHp: 100,
-    bossPos: { x: 0, z: -14 },
+    bossPos: { x: 0, z: -13 },
     bossHp: level.villainHp,
     bossMaxHp: level.villainHp,
     bossShield: level.villainPowers.includes('escudo_oscuro') ? 100 : 0,
     bossAttackTimer: 0,
-    bossSpecialTimer: 0,
     bossFlashTimer: 0,
     objectivesCount: level.objectiveCount,
     objectivesDone: 0,
-    hasLionKey: false,
-    isLionFreed: false,
     keys: {
       w: false,
       a: false,
@@ -162,6 +187,7 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     touchDir: { x: 0, z: 0 },
     collectibles: [] as CollectibleItem3D[],
     projectiles: [] as ActiveProjectile[],
+    particles: [] as SplashParticle[],
     scene: null as THREE.Scene | null,
     heroGroup: null as THREE.Group | null,
     guideArrowGroup: null as THREE.Group | null,
@@ -171,12 +197,13 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     bossMesh: null as THREE.Group | null,
     bossMaterial: null as THREE.MeshStandardMaterial | null,
     bossShieldMesh: null as THREE.Mesh | null,
+    bossSawMesh: null as THREE.Object3D | null,
     shieldMesh: null as THREE.Mesh | null,
     torsoMesh: null as THREE.Mesh | null,
     armsMesh: [] as THREE.Mesh[],
     legsMesh: [] as THREE.Mesh[],
-    torchLights: [] as TorchLight[],
-    cageMesh: null as THREE.Group | null,
+    metrocableGroup: null as THREE.Group | null,
+    cloudsGroup: null as THREE.Group | null,
   });
 
   const actionsRef = useRef({
@@ -191,21 +218,77 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
 
   const triggerCoinToast = useCallback((text: string) => {
     setCoinRewardToast(text);
-    setTimeout(() => setCoinRewardToast(null), 1900);
+    setTimeout(() => setCoinRewardToast(null), 1800);
   }, []);
 
-  // Award a Referee Green Card for good habits
-  const awardGreenCard = useCallback(
-    (msg: string) => {
-      soundEffects.playGreenCardSound();
-      setMatchGreenCards((c) => c + 1);
-      onAddGreenCardRef.current();
-      setRefereeCall(msg);
+  const awardGreenCard = useCallback((msg: string) => {
+    soundEffects.playGreenCardSound();
+    setMatchGreenCards((c) => c + 1);
+    onAddGreenCardRef.current();
+    setRefereeCall(msg);
+  }, []);
+
+  const spawnSplashBurst = useCallback((x: number, y: number, z: number, colorHex: number, count = 10) => {
+    const eng = engineRef.current;
+    if (!eng.scene) return;
+    for (let i = 0; i < count; i++) {
+      const mat = new THREE.MeshBasicMaterial({ color: colorHex });
+      const m = new THREE.Mesh(PARTICLE_GEOMETRY, mat);
+      m.position.set(x, y, z);
+      const angle = Math.random() * Math.PI * 2;
+      const spd = 0.08 + Math.random() * 0.22;
+      eng.scene.add(m);
+      eng.particles.push({
+        mesh: m,
+        vx: Math.cos(angle) * spd,
+        vy: 0.12 + Math.random() * 0.22,
+        vz: Math.sin(angle) * spd,
+        life: 22 + Math.floor(Math.random() * 12),
+      });
+    }
+  }, []);
+
+  const completeObjectiveItem = useCallback(
+    (item: CollectibleItem3D, viaWaterCannon = false) => {
+      const eng = engineRef.current;
+      if (item.collected || !eng.gameActive) return;
+
+      item.collected = true;
+      item.threatGroup.visible = false;
+      item.restoredGroup.visible = true;
+      (item.ringMesh.material as THREE.MeshBasicMaterial).color.setHex(0x10b981);
+
+      eng.objectivesDone += 1;
+      setHudObjectives(eng.objectivesDone);
+      onAddCoinsRef.current(150);
+
+      spawnSplashBurst(item.x, 1.2, item.z, viaWaterCannon ? 0x06b6d4 : 0x10b981, 14);
+      soundEffects.playCollectSound();
+
+      if (item.kind === 'tala') {
+        triggerCoinToast('🌳 Árbol protegido de la tala +150 🪙');
+        awardGreenCard(`Árbol a salvo (${eng.objectivesDone}/${eng.objectivesCount}) 🟩`);
+      } else if (item.kind === 'basura') {
+        triggerCoinToast('♻️ Basura limpiada +150 🪙');
+        awardGreenCard(`Lugar limpio (${eng.objectivesDone}/${eng.objectivesCount}) 🟩`);
+      } else if (item.kind === 'hambre') {
+        triggerCoinToast('🌽 Huerta regada +150 🪙');
+        awardGreenCard(`Cero Hambre (${eng.objectivesDone}/${eng.objectivesCount}) 🟩`);
+      } else {
+        triggerCoinToast('🕊️ Convivencia en Paz +150 🪙');
+        awardGreenCard(`Cero Violencia (${eng.objectivesDone}/${eng.objectivesCount}) 🟩`);
+      }
+
+      if (eng.objectivesDone >= eng.objectivesCount && eng.bossShield > 0) {
+        eng.bossShield = 0;
+        setHudBossShield(0);
+        if (eng.bossShieldMesh) eng.bossShieldMesh.visible = false;
+        setRefereeCall(`¡Escudo roto! Dispara tu Cañón de Agua [K]`);
+      }
     },
-    []
+    [awardGreenCard, spawnSplashBurst, triggerCoinToast]
   );
 
-  // Swap Character: Richard <-> Juan
   const handleSwapHero = useCallback(() => {
     const nextHero: HeroId = activeHero === 'richard' ? 'juan' : 'richard';
     setActiveHero(nextHero);
@@ -222,10 +305,9 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       (arm.material as THREE.MeshStandardMaterial).color.set(char.secondaryColor);
     });
 
-    setRefereeCall(`¡Cambio limpio! Entra ${char.name} al campo 🏃‍♂️`);
+    setRefereeCall(`Entra ${char.name} 💧`);
   }, [activeHero]);
 
-  // Toggle Eco-Buggy Car Mode [E]
   const handleToggleVehicle = useCallback(() => {
     const eng = engineRef.current;
     if (eng.movementMode === 'in_vehicle') {
@@ -234,18 +316,17 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       if (eng.carMesh) eng.carMesh.visible = false;
       if (eng.heroGroup) eng.heroGroup.position.y = 0;
       soundEffects.playClickSound();
-      setRefereeCall('A pie: ¡Sigue la flecha dorada!');
+      setRefereeCall('A pie');
     } else {
       eng.movementMode = 'in_vehicle';
       setMovementMode('in_vehicle');
       if (eng.carMesh) eng.carMesh.visible = true;
       if (eng.jetpackMesh) eng.jetpackMesh.visible = false;
       soundEffects.playCarEngineSound();
-      setRefereeCall('🚗 ¡Eco-Buggy activado! Usa las flechas para conducir');
+      setRefereeCall('🚗 Eco-Auto activo');
     }
   }, []);
 
-  // Toggle Flight [F]
   const handleToggleFlight = useCallback(() => {
     const eng = engineRef.current;
     if (eng.movementMode === 'flying') {
@@ -254,7 +335,7 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       if (eng.jetpackMesh) eng.jetpackMesh.visible = false;
       eng.heroPos.y = 0;
       soundEffects.playClickSound();
-      setRefereeCall('Aterrizaje perfecto 👌');
+      setRefereeCall('Aterrizaje suave');
     } else {
       eng.movementMode = 'flying';
       setMovementMode('flying');
@@ -262,11 +343,10 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       if (eng.jetpackMesh) eng.jetpackMesh.visible = true;
       eng.heroPos.y = 3.8;
       soundEffects.playJetpackSound();
-      setRefereeCall('✈️ ¡Volando por el cielo! Nada te detiene');
+      setRefereeCall('✈️ Modo Vuelo activo');
     }
   }, []);
 
-  // Use Teleport Pearl [T]
   const handleUseTeleportPearl = useCallback(() => {
     if (pearlsTeleport <= 0) return;
     const eng = engineRef.current;
@@ -275,17 +355,17 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
 
     const forwardX = Math.sin(eng.heroRot);
     const forwardZ = Math.cos(eng.heroRot);
-    eng.heroPos.x += forwardX * 14;
-    eng.heroPos.z += forwardZ * 14;
+    eng.heroPos.x += forwardX * 12;
+    eng.heroPos.z += forwardZ * 12;
 
-    const bound = 24;
+    const bound = 25;
     eng.heroPos.x = Math.max(-bound, Math.min(bound, eng.heroPos.x));
     eng.heroPos.z = Math.max(-bound, Math.min(bound, eng.heroPos.z));
 
-    setRefereeCall('🔮 ¡Súper Teletransporte!');
-  }, [pearlsTeleport]);
+    spawnSplashBurst(eng.heroPos.x, 1.5, eng.heroPos.z, 0xa855f7, 12);
+    setRefereeCall('🔮 Teletransporte');
+  }, [pearlsTeleport, spawnSplashBurst]);
 
-  // Use Speed Pearl (Nitro) [Shift]
   const handleUseSpeedPearl = useCallback(() => {
     if (pearlsSpeed <= 0) return;
     const eng = engineRef.current;
@@ -293,26 +373,28 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     eng.isNitroBoost = true;
     eng.nitroTimer = 180;
     soundEffects.playSpeedBoostSound();
-    setRefereeCall('⚡ ¡Súper Velocidad Sónica activada!');
+    setRefereeCall('⚡ Turbo activo');
   }, [pearlsSpeed]);
 
-  // Primary Attack & Elemental Powers
   const handleAttack = useCallback(() => {
     const eng = engineRef.current;
-    if (!eng.gameActive) return;
+    if (!eng.gameActive || !eng.scene) return;
 
     if (activeWeapon === 'bat') {
       soundEffects.playBatSwingSound();
-      const dx = eng.bossPos.x - eng.heroPos.x;
-      const dz = eng.bossPos.z - eng.heroPos.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      for (const item of eng.collectibles) {
+        if (!item.collected && Math.hypot(item.x - eng.heroPos.x, item.z - eng.heroPos.z) < 5.0) {
+          completeObjectiveItem(item, false);
+        }
+      }
 
-      if (dist < 5.5) {
+      const dist = Math.hypot(eng.bossPos.x - eng.heroPos.x, eng.bossPos.z - eng.heroPos.z);
+      if (dist < 6.0) {
         const dmg = Math.round(65 * muscleScale);
         if (eng.bossShield > 0) {
           eng.bossShield = Math.max(0, eng.bossShield - dmg);
           setHudBossShield(eng.bossShield);
-          setRefereeCall(`¡Golpe al escudo! Queda ${eng.bossShield}%`);
+          if (eng.bossShield <= 0 && eng.bossShieldMesh) eng.bossShieldMesh.visible = false;
         } else {
           eng.bossHp = Math.max(0, eng.bossHp - dmg);
           eng.bossFlashTimer = 6;
@@ -322,11 +404,9 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
           if (eng.bossHp <= 0) {
             eng.gameActive = false;
             setIsVictory(true);
-            onAddCoinsRef.current(100);
+            onAddCoinsRef.current(250);
             soundEffects.playVictoryFanfare();
-            confetti({ particleCount: 180, spread: 100, origin: { y: 0.6 } });
-          } else {
-            setRefereeCall(`💥 ¡Batazo limpio! -${dmg} HP`);
+            confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
           }
         }
       }
@@ -336,131 +416,125 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     if (activeWeapon === 'shield') {
       soundEffects.playClickSound();
       eng.isShieldActive = true;
-      eng.shieldTimer = 80;
+      eng.shieldTimer = 100;
       if (eng.shieldMesh) eng.shieldMesh.visible = true;
-      setRefereeCall('🛡️ ¡Escudo activado! Eres invencible');
+      setRefereeCall('🛡️ Escudo protector');
       return;
     }
 
-    // Ranged Elemental Projectiles (Auto-aims toward Boss!)
-    if (!eng.scene) return;
+    let targetX = eng.bossPos.x;
+    let targetZ = eng.bossPos.z;
+    const distToBoss = Math.hypot(eng.bossPos.x - eng.heroPos.x, eng.bossPos.z - eng.heroPos.z);
+
+    let nearestItemDist = 999;
+    let nearestItem: CollectibleItem3D | null = null;
+    for (const item of eng.collectibles) {
+      if (!item.collected) {
+        const d = Math.hypot(item.x - eng.heroPos.x, item.z - eng.heroPos.z);
+        if (d < nearestItemDist) {
+          nearestItemDist = d;
+          nearestItem = item;
+        }
+      }
+    }
+
+    if (nearestItem && nearestItemDist < 11 && nearestItemDist < distToBoss * 0.85) {
+      targetX = nearestItem.x;
+      targetZ = nearestItem.z;
+    }
 
     let colorHex = 0x06b6d4;
-    let dmg = Math.round(45 * muscleScale);
+    let dmg = Math.round(52 * muscleScale);
     let pType: ActiveProjectile['type'] = 'water';
 
     if (activeWeapon === 'water_cannon') {
       soundEffects.playWaterStreamSound();
       colorHex = 0x06b6d4;
+      dmg = Math.round(62 * muscleScale);
       pType = 'water';
     } else if (activeWeapon === 'lightning_staff') {
       soundEffects.playLightningSound();
       colorHex = 0x38bdf8;
-      dmg = Math.round(55 * muscleScale);
+      dmg = Math.round(56 * muscleScale);
       pType = 'lightning';
     } else if (activeWeapon === 'fire_orb') {
       soundEffects.playFireballSound();
-      colorHex = 0xef4444;
-      dmg = Math.round(60 * muscleScale);
+      colorHex = 0xf97316;
+      dmg = Math.round(58 * muscleScale);
       pType = 'fireball';
     } else {
       soundEffects.playLightBeamSound();
       colorHex = 0xfacc15;
-      dmg = Math.round(52 * muscleScale);
+      dmg = Math.round(54 * muscleScale);
       pType = 'light';
     }
 
-    const orbGeo = new THREE.SphereGeometry(0.45, 10, 10);
-    const orbMat = new THREE.MeshBasicMaterial({ color: colorHex });
-    const orbMesh = new THREE.Mesh(orbGeo, orbMat);
-    orbMesh.position.set(eng.heroPos.x, (eng.heroPos.y || 0) + 1.3, eng.heroPos.z);
-    eng.scene.add(orbMesh);
+    const dx = targetX - eng.heroPos.x;
+    const dz = targetZ - eng.heroPos.z;
+    const dist = Math.hypot(dx, dz) || 1;
+    const speed = 0.95;
 
-    const dx = eng.bossPos.x - eng.heroPos.x;
-    const dz = eng.bossPos.z - eng.heroPos.z;
-    const dist = Math.sqrt(dx * dx + dz * dz) || 1;
-    const speed = 0.9;
+    eng.heroRot = Math.atan2(dx, dz);
 
-    eng.projectiles.push({
-      mesh: orbMesh,
-      vx: (dx / dist) * speed,
-      vz: (dz / dist) * speed,
-      life: 55,
-      damage: dmg,
-      type: pType,
-    });
-  }, [activeWeapon, muscleScale]);
+    if (pType === 'water') {
+      for (let w = 0; w < 3; w++) {
+        const dropMat = new THREE.MeshStandardMaterial({
+          color: w === 0 ? 0x06b6d4 : 0x38bdf8,
+          emissive: 0x0284c7,
+          emissiveIntensity: 0.7,
+          roughness: 0.1,
+        });
+        const dropMesh = new THREE.Mesh(w === 0 ? ORB_GEOMETRY : WATER_DROP_GEOMETRY, dropMat);
+        const offsetBack = w * 0.65;
+        dropMesh.position.set(
+          eng.heroPos.x - (dx / dist) * offsetBack,
+          (eng.heroPos.y || 0) + 1.35 + (w === 1 ? 0.12 : 0),
+          eng.heroPos.z - (dz / dist) * offsetBack
+        );
+        eng.scene.add(dropMesh);
 
-  // Manual or Auto Collect Habit Objective
+        eng.projectiles.push({
+          mesh: dropMesh,
+          vx: (dx / dist) * speed,
+          vy: 0,
+          vz: (dz / dist) * speed,
+          life: 58,
+          damage: w === 0 ? dmg : Math.round(dmg * 0.25),
+          type: 'water',
+        });
+      }
+    } else {
+      const orbMat = new THREE.MeshBasicMaterial({ color: colorHex });
+      const orbMesh = new THREE.Mesh(ORB_GEOMETRY, orbMat);
+      orbMesh.position.set(eng.heroPos.x, (eng.heroPos.y || 0) + 1.35, eng.heroPos.z);
+      eng.scene.add(orbMesh);
+
+      eng.projectiles.push({
+        mesh: orbMesh,
+        vx: (dx / dist) * speed,
+        vy: 0,
+        vz: (dz / dist) * speed,
+        life: 55,
+        damage: dmg,
+        type: pType,
+      });
+    }
+  }, [activeWeapon, completeObjectiveItem, muscleScale]);
+
   const handleCollect = useCallback(() => {
     const eng = engineRef.current;
     if (!eng.gameActive) return;
 
-    // Check Rome Lion Key & Cage first
-    if (level.specialMissionType === 'colosseum_lion_key') {
-      if (!eng.hasLionKey) {
-        for (const item of eng.collectibles) {
-          if (item.specialType === 'lion_key' && !item.collected) {
-            const dx = item.x - eng.heroPos.x;
-            const dz = item.z - eng.heroPos.z;
-            if (Math.sqrt(dx * dx + dz * dz) < 5.0) {
-              item.collected = true;
-              item.mesh.visible = false;
-              eng.hasLionKey = true;
-              setHasLionKey(true);
-              triggerCoinToast('🔑 ¡Llave Dorada! Ve a la jaula central');
-              awardGreenCard('🟩 ¡Tarjeta Verde! Tienes la llave del león');
-              return;
-            }
-          }
-        }
-      } else if (!eng.isLionFreed) {
-        const cageDist = Math.sqrt(
-          eng.heroPos.x * eng.heroPos.x + eng.heroPos.z * eng.heroPos.z
-        );
-        if (cageDist < 6.0) {
-          eng.isLionFreed = true;
-          setIsLionFreed(true);
-          if (eng.cageMesh) eng.cageMesh.visible = false;
-          soundEffects.playLionRoarSound();
-          onAddCoinsRef.current(500);
-          triggerCoinToast('🦁 ¡Cachorro Libre! +500 🪙');
-          awardGreenCard('🟩 ¡Tarjeta Verde del Árbitro por salvar al león!');
-          return;
-        }
-      }
-    }
-
     for (const item of eng.collectibles) {
       if (!item.collected) {
-        const dx = item.x - eng.heroPos.x;
-        const dz = item.z - eng.heroPos.z;
-        if (Math.sqrt(dx * dx + dz * dz) < 5.0) {
-          item.collected = true;
-          item.mesh.visible = false;
-          eng.objectivesDone += 1;
-          setHudObjectives(eng.objectivesDone);
-          onAddCoinsRef.current(100);
-
-          if (item.specialType === 'chicken') {
-            soundEffects.playChickenCluckSound();
-            triggerCoinToast('🐔 ¡Gallina salvada! +100 🪙');
-          } else if (item.specialType === 'scroll') {
-            soundEffects.playScrollPickupSound();
-            triggerCoinToast('📜 ¡Pergamino rescatado! +100 🪙');
-          } else {
-            soundEffects.playCollectSound();
-            triggerCoinToast('✨ ¡Buen Hábito! +100 🪙');
-          }
-
-          awardGreenCard(
-            `🟩 ¡Árbitro valida punto! (${eng.objectivesDone}/${eng.objectivesCount})`
-          );
+        const dist = Math.hypot(item.x - eng.heroPos.x, item.z - eng.heroPos.z);
+        if (dist < 5.2) {
+          completeObjectiveItem(item, false);
           return;
         }
       }
     }
-  }, [level.specialMissionType, awardGreenCard, triggerCoinToast]);
+  }, [completeObjectiveItem]);
 
   useEffect(() => {
     actionsRef.current = {
@@ -482,12 +556,11 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     handleCollect,
   ]);
 
-  // INITIALIZE 3D WORLD & 3D REFEREE
+  // INITIALIZE 3D WORLD
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
 
-    // Referee whistle is strictly reserved for fouls/infractions
     soundEffects.playClickSound();
 
     const eng = engineRef.current;
@@ -496,10 +569,10 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     eng.bossHp = level.villainHp;
     eng.bossMaxHp = level.villainHp;
     eng.bossShield = level.villainPowers.includes('escudo_oscuro') ? 100 : 0;
-    eng.heroPos = { x: 0, y: 0, z: 8 };
-    eng.bossPos = { x: 0, z: -14 };
+    eng.heroPos = { x: 0, y: 0, z: 9 };
+    eng.bossPos = { x: 0, z: -13 };
     eng.objectivesDone = 0;
-    eng.torchLights = [];
+    eng.particles = [];
 
     const width = container.clientWidth || 800;
     const height = container.clientHeight || 600;
@@ -507,228 +580,249 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     const scene = new THREE.Scene();
     eng.scene = scene;
 
-    // Bright, crisp kid-friendly sky colors per biome
-    let skyHex = 0x0c192c;
-    if (level.biome === 'oasis_egipcio') skyHex = 0x3b2510;
-    else if (level.biome === 'roma_coliseo') skyHex = 0x1c120e;
-    else if (level.biome === 'grecia_filosofos') skyHex = 0x102a45;
-    else if (level.biome === 'edad_media_castillo') skyHex = 0x0f1f1c;
-    else if (level.biome === 'japon_montana') skyHex = 0x1e2538;
+    let skyHex = 0x7dd3fc;
+    let groundColor = 0x22c55e;
+    let pathColor = 0xe2e8f0;
+
+    if (level.biome === 'bosque_arvi' || level.biome === 'jardin_guayacanes') {
+      skyHex = 0x67e8f9;
+      groundColor = 0x16a34a;
+      pathColor = 0xd6d3d1;
+    } else if (level.biome === 'comuna_paz' || level.biome === 'ciudad_metro') {
+      skyHex = 0x93c5fd;
+      groundColor = 0x4ade80;
+      pathColor = 0xcbd5e1;
+    } else if (level.biome === 'huerta_solidaria') {
+      skyHex = 0xfde68a;
+      groundColor = 0x65a30d;
+      pathColor = 0xd97706;
+    } else if (level.biome === 'rio_medellin' || level.biome === 'guatape_embalse') {
+      skyHex = 0x38bdf8;
+      groundColor = 0x10b981;
+      pathColor = 0x0284c7;
+    } else if (level.biome === 'paramo_andino') {
+      skyHex = 0xbae6fd;
+      groundColor = 0x4d7c0f;
+      pathColor = 0x94a3b8;
+    } else if (level.biome === 'cumbre_colombia') {
+      skyHex = 0xfef08a;
+      groundColor = 0x15803d;
+      pathColor = 0xfacc15;
+    }
 
     scene.background = new THREE.Color(skyHex);
-    scene.fog = new THREE.FogExp2(skyHex, 0.015);
+    scene.fog = new THREE.FogExp2(skyHex, 0.009);
 
-    const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 150);
-    camera.position.set(0, 12, 22);
+    const camera = new THREE.PerspectiveCamera(48, width / height, 0.1, 220);
+    camera.position.set(0, 13, 23);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
-    scene.add(ambientLight);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, groundColor, 0.95);
+    hemiLight.position.set(0, 40, 0);
+    scene.add(hemiLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfffbeb, 1.3);
-    dirLight.position.set(16, 28, 16);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 1024;
-    dirLight.shadow.mapSize.height = 1024;
-    scene.add(dirLight);
+    const sunLight = new THREE.DirectionalLight(0xfffbeb, 1.55);
+    sunLight.position.set(22, 36, 20);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 1024;
+    sunLight.shadow.mapSize.height = 1024;
+    scene.add(sunLight);
 
-    // Ground
-    const groundSize = 64;
+    const sunOrb = new THREE.Mesh(
+      new THREE.SphereGeometry(4.5, 18, 18),
+      new THREE.MeshBasicMaterial({ color: 0xfef08a })
+    );
+    sunOrb.position.set(35, 38, -48);
+    scene.add(sunOrb);
+
+    const cloudsGroup = new THREE.Group();
+    const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+    for (let c = 0; c < 7; c++) {
+      const cg = new THREE.Group();
+      const p1 = new THREE.Mesh(new THREE.SphereGeometry(2.2, 10, 10), cloudMat);
+      const p2 = new THREE.Mesh(new THREE.SphereGeometry(1.7, 10, 10), cloudMat);
+      p2.position.set(1.8, -0.3, 0.2);
+      cg.add(p1, p2);
+      cg.position.set((c - 3) * 18, 20 + (c % 3) * 3, -32 - (c % 2) * 12);
+      cloudsGroup.add(cg);
+    }
+    scene.add(cloudsGroup);
+    eng.cloudsGroup = cloudsGroup;
+
+    const groundSize = 84;
     const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize);
-    let groundColor = 0x15803d;
-    if (level.biome === 'oasis_egipcio') groundColor = 0xd97706;
-    else if (level.biome === 'roma_coliseo') groundColor = 0x57534e;
-    else if (level.biome === 'grecia_filosofos') groundColor = 0x475569;
-    else if (level.biome === 'edad_media_castillo') groundColor = 0x166534;
-    else if (level.biome === 'japon_montana') groundColor = 0xe2e8f0;
-    else if (level.biome === 'nieve_invierno') groundColor = 0xbfdbfe;
-    else if (level.biome === 'oceano') groundColor = 0x0284c7;
-    else if (level.biome === 'desierto') groundColor = 0xb45309;
-
-    const groundMat = new THREE.MeshStandardMaterial({
-      color: groundColor,
-      roughness: 0.85,
-    });
+    const groundMat = new THREE.MeshStandardMaterial({ color: groundColor, roughness: 0.88 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // Biome 3D Landmarks
-    if (level.biome === 'oasis_egipcio') {
-      const pyrMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.8 });
-      const pyr1 = new THREE.Mesh(new THREE.ConeGeometry(15, 18, 4), pyrMat);
-      pyr1.position.set(-20, 9, -30);
-      pyr1.rotation.y = Math.PI / 4;
-      scene.add(pyr1);
+    const plazaMesh = new THREE.Mesh(
+      new THREE.CircleGeometry(14, 32),
+      new THREE.MeshStandardMaterial({
+        color: pathColor,
+        roughness: 0.75,
+      })
+    );
+    plazaMesh.rotation.x = -Math.PI / 2;
+    plazaMesh.position.set(0, 0.03, -2);
+    plazaMesh.receiveShadow = true;
+    scene.add(plazaMesh);
 
-      const pyr2 = new THREE.Mesh(new THREE.ConeGeometry(12, 14, 4), pyrMat);
-      pyr2.position.set(22, 7, -32);
-      pyr2.rotation.y = Math.PI / 4;
-      scene.add(pyr2);
-
-      const pool = new THREE.Mesh(
-        new THREE.CircleGeometry(7, 24),
-        new THREE.MeshStandardMaterial({ color: 0x06b6d4, roughness: 0.1 })
+    // Mountains
+    const mountainPositions = [
+      { x: -34, z: -38, r: 18, h: 24, c: 0x15803d },
+      { x: -12, z: -42, r: 22, h: 28, c: 0x166534 },
+      { x: 16, z: -40, r: 20, h: 26, c: 0x15803d },
+      { x: 36, z: -36, r: 17, h: 22, c: 0x14532d },
+    ];
+    mountainPositions.forEach((mp) => {
+      const mtn = new THREE.Mesh(
+        new THREE.ConeGeometry(mp.r, mp.h, 6),
+        new THREE.MeshStandardMaterial({ color: mp.c, roughness: 0.9 })
       );
-      pool.rotation.x = -Math.PI / 2;
-      pool.position.set(0, 0.05, -2);
-      scene.add(pool);
-    } else if (level.biome === 'roma_coliseo') {
-      // Cage & Lion Cub at center
-      const cageGroup = new THREE.Group();
-      const barGeo = new THREE.CylinderGeometry(0.06, 0.06, 2.8, 8);
-      const barMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.8 });
-      for (let i = -1.2; i <= 1.2; i += 0.6) {
-        const b1 = new THREE.Mesh(barGeo, barMat);
-        b1.position.set(i, 1.4, -1.2);
-        cageGroup.add(b1);
-        const b2 = new THREE.Mesh(barGeo, barMat);
-        b2.position.set(i, 1.4, 1.2);
-        cageGroup.add(b2);
-      }
-      scene.add(cageGroup);
-      eng.cageMesh = cageGroup;
+      mtn.position.set(mp.x, mp.h / 2 - 1, mp.z);
+      scene.add(mtn);
+    });
 
-      const lionGroup = new THREE.Group();
-      const lionBody = new THREE.Mesh(
-        new THREE.BoxGeometry(0.9, 0.65, 1.2),
-        new THREE.MeshStandardMaterial({ color: 0xf59e0b })
-      );
-      lionBody.position.y = 0.5;
-      lionGroup.add(lionBody);
-      const lionHead = new THREE.Mesh(
-        new THREE.SphereGeometry(0.4, 12, 12),
-        new THREE.MeshStandardMaterial({ color: 0xfbbf24 })
-      );
-      lionHead.position.set(0, 0.95, 0.6);
-      lionGroup.add(lionHead);
-      scene.add(lionGroup);
-    }
+    // Metrocable
+    const metrocableGroup = new THREE.Group();
+    const cableLine = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.04, 76, 6),
+      new THREE.MeshBasicMaterial({ color: 0x334155 })
+    );
+    cableLine.rotation.z = Math.PI / 2;
+    cableLine.position.set(0, 16.5, -24);
+    scene.add(cableLine);
 
-    // ==========================================
-    // 3D REFEREE CHARACTER ("DON JUSTO") IN THE ARENA!
-    // ==========================================
+    const cabinBody = new THREE.Mesh(
+      new THREE.BoxGeometry(2.0, 1.5, 1.5),
+      new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.3, roughness: 0.3 })
+    );
+    metrocableGroup.add(cabinBody);
+    metrocableGroup.position.set(-18, 15.0, -24);
+    scene.add(metrocableGroup);
+    eng.metrocableGroup = metrocableGroup;
+
+    // Referee
     const refereeGroup = new THREE.Group();
     const refTorso = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.45, 0.45, 1.1, 12),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, metalness: 0.3 })
+      new THREE.CylinderGeometry(0.42, 0.42, 1.1, 12),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc })
     );
-    refTorso.position.y = 1.2;
+    refTorso.position.y = 1.15;
     refereeGroup.add(refTorso);
-
-    // Black Referee Stripe Belt & Shoulders
-    const refStripe = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.47, 0.47, 0.3, 12),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a })
-    );
-    refStripe.position.y = 1.2;
-    refereeGroup.add(refStripe);
 
     const refHead = new THREE.Mesh(
       new THREE.SphereGeometry(0.36, 14, 14),
       new THREE.MeshStandardMaterial({ color: 0xfde68a })
     );
-    refHead.position.y = 2.05;
+    refHead.position.y = 2.0;
     refereeGroup.add(refHead);
 
-    // Referee Golden Halo Ring
-    const refHalo = new THREE.Mesh(
-      new THREE.TorusGeometry(0.8, 0.06, 8, 24),
-      new THREE.MeshBasicMaterial({ color: 0xfacc15 })
-    );
-    refHalo.rotation.x = Math.PI / 2;
-    refHalo.position.y = 0.15;
-    refereeGroup.add(refHalo);
-
-    // Green Card in Referee's raised hand
-    const greenCardMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.32, 0.48, 0.05),
-      new THREE.MeshBasicMaterial({ color: 0x10b981 })
-    );
-    greenCardMesh.position.set(0.65, 1.85, 0.2);
-    refereeGroup.add(greenCardMesh);
-
-    refereeGroup.position.set(-5.5, 0.5, 4);
+    refereeGroup.position.set(-6.5, 0.4, 5);
     scene.add(refereeGroup);
     eng.refereeGroup = refereeGroup;
 
-    // ==========================================
-    // HERO 3D MODEL + KID-FRIENDLY 3D DIRECTIONAL GUIDE ARROW
-    // ==========================================
+    // Hero Model
     const heroGroup = new THREE.Group();
     eng.heroGroup = heroGroup;
     const char = HERO_DUO[eng.activeHero];
 
     const torsoW = 1.0 * muscleScale;
-    const torsoD = 0.65 * muscleScale;
+    const torsoD = 0.62 * muscleScale;
     const torso = new THREE.Mesh(
       new THREE.BoxGeometry(torsoW, 1.25, torsoD),
-      new THREE.MeshStandardMaterial({ color: new THREE.Color(char.primaryColor), metalness: 0.5 })
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(char.primaryColor),
+        metalness: 0.3,
+        roughness: 0.4,
+      })
     );
     torso.position.y = 1.35;
     torso.castShadow = true;
     heroGroup.add(torso);
     eng.torsoMesh = torso;
 
-    const armW = 0.36 * muscleScale;
+    const hydroTank = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.26, 0.26, 0.95, 12),
+      new THREE.MeshStandardMaterial({
+        color: 0x06b6d4,
+        emissive: 0x0284c7,
+        emissiveIntensity: 0.3,
+      })
+    );
+    hydroTank.position.set(0, 1.42, -(torsoD / 2 + 0.22));
+    heroGroup.add(hydroTank);
+
+    const armW = 0.34 * muscleScale;
     const armGeo = new THREE.BoxGeometry(armW, 0.85, armW);
     const armMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(char.secondaryColor) });
     const armL = new THREE.Mesh(armGeo, armMat);
     armL.position.set(-(torsoW / 2 + armW / 2 + 0.05), 1.3, 0);
     heroGroup.add(armL);
+
     const armR = new THREE.Mesh(armGeo, armMat);
     armR.position.set(torsoW / 2 + armW / 2 + 0.05, 1.3, 0);
+
+    const cannonBarrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.14, 0.17, 0.9, 10),
+      new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.5 })
+    );
+    cannonBarrel.rotation.x = Math.PI / 2;
+    cannonBarrel.position.set(0, -0.15, 0.45);
+    armR.add(cannonBarrel);
+
     heroGroup.add(armR);
     eng.armsMesh = [armL, armR];
 
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(0.42, 16, 16),
-      new THREE.MeshStandardMaterial({ color: 0xfbbf24 })
+      new THREE.MeshStandardMaterial({ color: 0xfdba74 })
     );
     head.position.y = 2.25;
     heroGroup.add(head);
 
-    const legGeo = new THREE.BoxGeometry(0.38, 0.85, 0.38);
+    const legGeo = new THREE.BoxGeometry(0.34, 0.85, 0.36);
     const legMat = new THREE.MeshStandardMaterial({ color: 0x1e293b });
     const legL = new THREE.Mesh(legGeo, legMat);
-    legL.position.set(-0.3, 0.45, 0);
+    legL.position.set(-0.26, 0.45, 0);
     heroGroup.add(legL);
     const legR = new THREE.Mesh(legGeo, legMat);
-    legR.position.set(0.3, 0.45, 0);
+    legR.position.set(0.26, 0.45, 0);
     heroGroup.add(legR);
     eng.legsMesh = [legL, legR];
 
-    // Jetpack
     const jetpackGroup = new THREE.Group();
-    const tankGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.9, 8);
-    const tankMat = new THREE.MeshStandardMaterial({ color: 0x0284c7 });
-    const t1 = new THREE.Mesh(tankGeo, tankMat);
-    t1.position.set(-0.3, 1.3, -0.4);
-    jetpackGroup.add(t1);
-    const t2 = new THREE.Mesh(tankGeo, tankMat);
-    t2.position.set(0.3, 1.3, -0.4);
-    jetpackGroup.add(t2);
+    const wingMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8 });
+    const wingL = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.1, 0.4), wingMat);
+    wingL.position.set(-1.0, 1.5, -0.3);
+    const wingR = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.1, 0.4), wingMat);
+    wingR.position.set(1.0, 1.5, -0.3);
+    jetpackGroup.add(wingL, wingR);
     jetpackGroup.visible = false;
     heroGroup.add(jetpackGroup);
     eng.jetpackMesh = jetpackGroup;
 
-    // Shield Dome
     const shieldDome = new THREE.Mesh(
-      new THREE.SphereGeometry(2.0, 16, 16),
+      new THREE.SphereGeometry(2.1, 16, 16),
       new THREE.MeshBasicMaterial({
         color: 0x38bdf8,
         wireframe: true,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.6,
       })
     );
     shieldDome.position.y = 1.3;
@@ -736,27 +830,27 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     heroGroup.add(shieldDome);
     eng.shieldMesh = shieldDome;
 
-    heroGroup.position.set(0, 0, 8);
+    heroGroup.position.set(0, 0, 9);
     scene.add(heroGroup);
 
-    // 3D Floating Directional Guide Arrow for Kids!
+    // Guide Arrow
     const guideArrowGroup = new THREE.Group();
     const arrowCone = new THREE.Mesh(
-      new THREE.ConeGeometry(0.45, 1.1, 8),
+      new THREE.ConeGeometry(0.4, 1.0, 8),
       new THREE.MeshBasicMaterial({ color: 0xfacc15 })
     );
     arrowCone.rotation.x = Math.PI / 2;
-    arrowCone.position.z = 1.8;
+    arrowCone.position.z = 1.7;
     guideArrowGroup.add(arrowCone);
-    guideArrowGroup.position.set(0, 0.6, 8);
+    guideArrowGroup.position.set(0, 0.6, 9);
     scene.add(guideArrowGroup);
     eng.guideArrowGroup = guideArrowGroup;
 
-    // GTA Eco-Buggy
+    // Eco-Auto
     const carGroup = new THREE.Group();
     const carBody = new THREE.Mesh(
-      new THREE.BoxGeometry(2.4, 0.8, 3.8),
-      new THREE.MeshStandardMaterial({ color: 0x06b6d4, metalness: 0.7 })
+      new THREE.BoxGeometry(2.3, 0.8, 3.8),
+      new THREE.MeshStandardMaterial({ color: 0x10b981, metalness: 0.5, roughness: 0.3 })
     );
     carBody.position.y = 0.7;
     carGroup.add(carBody);
@@ -764,26 +858,42 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     scene.add(carGroup);
     eng.carMesh = carGroup;
 
-    // Boss 3D Model
+    // Boss Model
     const bossGroup = new THREE.Group();
     const bossMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(level.villainColor),
-      roughness: 0.4,
-      metalness: 0.7,
+      roughness: 0.45,
     });
     eng.bossMaterial = bossMat;
 
-    const bTorso = new THREE.Mesh(new THREE.BoxGeometry(2.9, 2.9, 1.9), bossMat);
-    bTorso.position.y = 2.6;
-    bTorso.castShadow = true;
-    bossGroup.add(bTorso);
+    if (resolvedArchetype === 'basurote') {
+      const canBody = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.7, 1.4, 3.1, 14),
+        bossMat
+      );
+      canBody.position.y = 1.9;
+      bossGroup.add(canBody);
 
-    const bHead = new THREE.Mesh(
-      new THREE.BoxGeometry(1.4, 1.4, 1.4),
-      new THREE.MeshStandardMaterial({ color: 0x111827 })
-    );
-    bHead.position.y = 4.4;
-    bossGroup.add(bHead);
+      const lidMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.9, 1.9, 0.3, 14),
+        new THREE.MeshStandardMaterial({ color: 0x475569 })
+      );
+      lidMesh.position.y = 3.7;
+      bossGroup.add(lidMesh);
+      eng.bossSawMesh = lidMesh;
+    } else {
+      const bTorso = new THREE.Mesh(new THREE.BoxGeometry(2.7, 2.8, 1.8), bossMat);
+      bTorso.position.y = 2.3;
+      bossGroup.add(bTorso);
+
+      const bHead = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 1.3, 1.4),
+        new THREE.MeshStandardMaterial({ color: 0x1e293b })
+      );
+      bHead.position.y = 4.1;
+      bossGroup.add(bHead);
+      eng.bossSawMesh = null;
+    }
 
     if (level.villainPowers.includes('escudo_oscuro')) {
       const dShield = new THREE.Mesh(
@@ -792,15 +902,15 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
           color: 0xa855f7,
           wireframe: true,
           transparent: true,
-          opacity: 0.55,
+          opacity: 0.45,
         })
       );
-      dShield.position.y = 2.6;
+      dShield.position.y = 2.4;
       bossGroup.add(dShield);
       eng.bossShieldMesh = dShield;
     }
 
-    bossGroup.position.set(0, 0, -14);
+    bossGroup.position.set(0, 0, -13);
     scene.add(bossGroup);
     eng.bossMesh = bossGroup;
 
@@ -808,58 +918,97 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     const collectibles: CollectibleItem3D[] = [];
     eng.collectibles = collectibles;
 
-    if (level.specialMissionType === 'colosseum_lion_key') {
-      const keyGroup = new THREE.Group();
-      const kMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.12, 8, 16), kMat);
-      ring.position.y = 1.0;
-      keyGroup.add(ring);
-      keyGroup.position.set(-10, 0, 6);
-      scene.add(keyGroup);
-      collectibles.push({
-        mesh: keyGroup,
-        collected: false,
-        x: -10,
-        z: 6,
-        specialType: 'lion_key',
-      });
-    }
-
-    const sharedItemGeo = new THREE.IcosahedronGeometry(0.65, 1);
-    const sharedItemMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(level.lifeStageColor),
-      emissive: new THREE.Color(level.lifeStageColor),
-      emissiveIntensity: 1.1,
-    });
+    const itemKind: CollectibleItem3D['kind'] =
+      level.habitCategory === 'no_tala'
+        ? 'tala'
+        : level.habitCategory === 'recoger_basura'
+        ? 'basura'
+        : level.habitCategory === 'cero_hambre'
+        ? 'hambre'
+        : 'violencia';
 
     for (let i = 0; i < level.objectiveCount; i++) {
-      const g = new THREE.Group();
-      const m = new THREE.Mesh(sharedItemGeo, sharedItemMat);
-      m.position.y = 0.9;
-      g.add(m);
+      const rootGroup = new THREE.Group();
+      const threatGroup = new THREE.Group();
+      const restoredGroup = new THREE.Group();
+      restoredGroup.visible = false;
+
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: itemKind === 'tala' ? 0xf59e0b : itemKind === 'basura' ? 0x84cc16 : 0x38bdf8,
+      });
+      const ringMesh = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.06, 6, 20), ringMat);
+      ringMesh.rotation.x = Math.PI / 2;
+      ringMesh.position.y = 0.08;
+      rootGroup.add(ringMesh);
+
+      if (itemKind === 'tala') {
+        const stumpTrunk = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.26, 0.34, 1.6, 8),
+          new THREE.MeshStandardMaterial({ color: 0x78350f })
+        );
+        stumpTrunk.position.y = 0.8;
+        threatGroup.add(stumpTrunk);
+
+        const smallCrown = new THREE.Mesh(
+          new THREE.ConeGeometry(0.9, 1.6, 8),
+          new THREE.MeshStandardMaterial({ color: 0x65a30d })
+        );
+        smallCrown.position.y = 1.9;
+        threatGroup.add(smallCrown);
+
+        const tallTrunk = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.32, 0.45, 2.4, 8),
+          new THREE.MeshStandardMaterial({ color: 0x78350f })
+        );
+        tallTrunk.position.y = 1.2;
+        restoredGroup.add(tallTrunk);
+
+        const lushCrown = new THREE.Mesh(
+          new THREE.DodecahedronGeometry(1.4, 1),
+          new THREE.MeshStandardMaterial({ color: 0x10b981 })
+        );
+        lushCrown.position.y = 2.8;
+        restoredGroup.add(lushCrown);
+      } else {
+        const threatSphere = new THREE.Mesh(
+          new THREE.DodecahedronGeometry(0.6, 0),
+          new THREE.MeshStandardMaterial({ color: 0x475569 })
+        );
+        threatSphere.position.y = 0.6;
+        threatGroup.add(threatSphere);
+
+        const bloom = new THREE.Mesh(
+          new THREE.SphereGeometry(0.5, 10, 10),
+          new THREE.MeshStandardMaterial({ color: 0x06b6d4 })
+        );
+        bloom.position.y = 0.9;
+        restoredGroup.add(bloom);
+      }
+
+      rootGroup.add(threatGroup);
+      rootGroup.add(restoredGroup);
 
       const angle = (i / level.objectiveCount) * Math.PI * 2;
-      const radius = 8 + (i % 2) * 4;
+      const radius = 8.5 + (i % 2) * 4.2;
       const x = Math.sin(angle) * radius;
-      const z = Math.cos(angle) * radius - 2;
+      const z = Math.cos(angle) * radius - 1.5;
 
-      g.position.set(x, 0, z);
-      scene.add(g);
+      rootGroup.position.set(x, 0, z);
+      scene.add(rootGroup);
+
       collectibles.push({
-        mesh: g,
+        mesh: rootGroup,
+        threatGroup,
+        restoredGroup,
+        ringMesh,
         collected: false,
         x,
         z,
-        specialType:
-          level.specialMissionType === 'greek_scrolls'
-            ? 'scroll'
-            : level.specialMissionType === 'medieval_hens_castle'
-            ? 'chicken'
-            : 'trash',
+        kind: itemKind,
       });
     }
 
-    // Keyboard Controls
+    // Keyboard handlers
     const handleKeyDown = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
       if (k === 'w' || e.code === 'KeyW') eng.keys.w = true;
@@ -883,13 +1032,13 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       } else if (e.key === 'Shift') {
         actionsRef.current.onUseSpeedPearl();
       } else if (k === '1') {
-        setActiveWeapon('bat');
-      } else if (k === '2') {
         setActiveWeapon('water_cannon');
-      } else if (k === '3') {
+      } else if (k === '2') {
         setActiveWeapon('lightning_staff');
-      } else if (k === '4') {
+      } else if (k === '3') {
         setActiveWeapon('fire_orb');
+      } else if (k === '4') {
+        setActiveWeapon('bat');
       } else if (k === '5') {
         setActiveWeapon('shield');
       } else if (k === 'j') {
@@ -914,7 +1063,6 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
 
-    // 60FPS Game Loop
     let animId = 0;
     const clock = new THREE.Clock();
 
@@ -923,21 +1071,26 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       const delta = Math.min(clock.getDelta(), 0.1);
       const elapsed = clock.getElapsedTime();
 
+      if (eng.metrocableGroup) {
+        eng.metrocableGroup.position.x = Math.sin(elapsed * 0.35) * 24;
+      }
+      if (eng.cloudsGroup) {
+        eng.cloudsGroup.position.x = Math.sin(elapsed * 0.12) * 3;
+      }
+
       if (!eng.gameActive) {
         renderer.render(scene, camera);
         return;
       }
 
-      // Animate 3D Referee Floating & Following Match
       if (eng.refereeGroup) {
-        eng.refereeGroup.position.y = 0.4 + Math.sin(elapsed * 3) * 0.25;
+        eng.refereeGroup.position.y = 0.35 + Math.sin(elapsed * 3) * 0.2;
         eng.refereeGroup.rotation.y = Math.atan2(
           eng.heroPos.x - eng.refereeGroup.position.x,
           eng.heroPos.z - eng.refereeGroup.position.z
         );
       }
 
-      // Player Movement
       const isUp = eng.keys.w || eng.keys.up || eng.touchDir.z < -0.2;
       const isDown = eng.keys.s || eng.keys.down || eng.touchDir.z > 0.2;
       const isLeft = eng.keys.a || eng.keys.left || eng.touchDir.x < -0.2;
@@ -954,8 +1107,8 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       }
 
       if (eng.movementMode === 'in_vehicle') {
-        const accel = 0.024 * speedMultiplier;
-        const maxSpd = 0.55 * speedMultiplier;
+        const accel = 0.025 * speedMultiplier;
+        const maxSpd = 0.56 * speedMultiplier;
 
         if (isUp) eng.carSpeed = Math.min(maxSpd, eng.carSpeed + accel);
         else if (isDown) eng.carSpeed = Math.max(-maxSpd * 0.5, eng.carSpeed - accel);
@@ -979,7 +1132,7 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
           heroGroup.rotation.y = eng.heroRot;
         }
       } else {
-        const walkSpeed = (eng.movementMode === 'flying' ? 0.34 : 0.25) * speedMultiplier;
+        const walkSpeed = (eng.movementMode === 'flying' ? 0.35 : 0.26) * speedMultiplier;
         let mx = 0;
         let mz = 0;
         if (isUp) mz -= 1;
@@ -990,7 +1143,7 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
         const isMoving = mx !== 0 || mz !== 0;
 
         if (isMoving) {
-          const len = Math.sqrt(mx * mx + mz * mz);
+          const len = Math.hypot(mx, mz);
           mx /= len;
           mz /= len;
           eng.heroPos.x += mx * walkSpeed;
@@ -1004,12 +1157,11 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
           heroGroup.position.set(eng.heroPos.x, hoverY, eng.heroPos.z);
           heroGroup.rotation.y = eng.heroRot;
 
-          // Natural walk cycle animation for arms & legs - eliminates frozen sliding!
           if (eng.movementMode === 'on_foot') {
             if (isMoving) {
               const swing = Math.sin(elapsed * 12) * 0.45;
               if (eng.armsMesh[0]) eng.armsMesh[0].rotation.x = swing;
-              if (eng.armsMesh[1]) eng.armsMesh[1].rotation.x = -swing;
+              if (eng.armsMesh[1]) eng.armsMesh[1].rotation.x = -swing * 0.4;
               if (eng.legsMesh[0]) eng.legsMesh[0].rotation.x = -swing;
               if (eng.legsMesh[1]) eng.legsMesh[1].rotation.x = swing;
             } else {
@@ -1026,7 +1178,6 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       eng.heroPos.x = Math.max(-bound, Math.min(bound, eng.heroPos.x));
       eng.heroPos.z = Math.max(-bound, Math.min(bound, eng.heroPos.z));
 
-      // Update 3D Directional Guide Arrow for Kids (Points to nearest objective or Boss)
       if (eng.guideArrowGroup) {
         eng.guideArrowGroup.position.set(
           eng.heroPos.x,
@@ -1055,10 +1206,9 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
         );
       }
 
-      // Smooth Third-Person Console Camera
-      const camDist = eng.movementMode === 'in_vehicle' ? 17 : 14;
-      const camHeight = eng.movementMode === 'in_vehicle' ? 11 : 10;
-      camera.position.x = THREE.MathUtils.lerp(camera.position.x, eng.heroPos.x * 0.7, 0.1);
+      const camDist = eng.movementMode === 'in_vehicle' ? 17 : 14.5;
+      const camHeight = eng.movementMode === 'in_vehicle' ? 11 : 10.2;
+      camera.position.x = THREE.MathUtils.lerp(camera.position.x, eng.heroPos.x * 0.72, 0.1);
       camera.position.z = THREE.MathUtils.lerp(
         camera.position.z,
         eng.heroPos.z + camDist,
@@ -1069,9 +1219,23 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
         (eng.heroPos.y || 0) + camHeight,
         0.1
       );
-      camera.lookAt(eng.heroPos.x, (eng.heroPos.y || 0) + 1.2, eng.heroPos.z - 2);
+      camera.lookAt(eng.heroPos.x, (eng.heroPos.y || 0) + 1.2, eng.heroPos.z - 2.5);
 
-      // Shield decay
+      for (let i = eng.particles.length - 1; i >= 0; i--) {
+        const pt = eng.particles[i];
+        pt.mesh.position.x += pt.vx;
+        pt.mesh.position.y += pt.vy;
+        pt.mesh.position.z += pt.vz;
+        pt.vy -= 0.012;
+        pt.life--;
+        pt.mesh.scale.setScalar(Math.max(0.1, pt.life / 25));
+        if (pt.life <= 0) {
+          scene.remove(pt.mesh);
+          disposeMeshMaterial(pt.mesh);
+          eng.particles.splice(i, 1);
+        }
+      }
+
       if (eng.shieldTimer > 0) {
         eng.shieldTimer--;
         if (eng.shieldTimer <= 0 && shieldDome) {
@@ -1080,10 +1244,10 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
         }
       }
 
-      // Projectiles update
       for (let i = eng.projectiles.length - 1; i >= 0; i--) {
         const p = eng.projectiles[i];
         p.mesh.position.x += p.vx;
+        p.mesh.position.y += p.vy;
         p.mesh.position.z += p.vz;
         p.life--;
 
@@ -1094,12 +1258,12 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
           );
           if (hDist < 2.0 || p.life <= 0) {
             scene.remove(p.mesh);
+            disposeMeshMaterial(p.mesh);
             eng.projectiles.splice(i, 1);
             if (hDist < 2.0 && !eng.isShieldActive) {
-              eng.heroHp = Math.max(0, eng.heroHp - 12);
+              eng.heroHp = Math.max(0, eng.heroHp - 10);
               setHudHp(eng.heroHp);
               soundEffects.playRefereeWhistle();
-              setRefereeCall('¡FALTA! ⚠️ Infracción por vertido tóxico');
               if (eng.heroHp <= 0) {
                 eng.gameActive = false;
                 setIsDefeat(true);
@@ -1109,21 +1273,47 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
           continue;
         }
 
+        let hitObjective = false;
+        for (const item of eng.collectibles) {
+          if (!item.collected) {
+            const iDist = Math.hypot(
+              item.x - p.mesh.position.x,
+              item.z - p.mesh.position.z
+            );
+            if (iDist < 2.3) {
+              completeObjectiveItem(item, true);
+              hitObjective = true;
+              break;
+            }
+          }
+        }
+
+        if (hitObjective) {
+          scene.remove(p.mesh);
+          disposeMeshMaterial(p.mesh);
+          eng.projectiles.splice(i, 1);
+          continue;
+        }
+
         const bDist = Math.hypot(
           eng.bossPos.x - p.mesh.position.x,
           eng.bossPos.z - p.mesh.position.z
         );
-        if (bDist < 3.0 || p.life <= 0) {
+        if (bDist < 3.2 || p.life <= 0) {
+          const hitX = p.mesh.position.x;
+          const hitZ = p.mesh.position.z;
           scene.remove(p.mesh);
+          disposeMeshMaterial(p.mesh);
           eng.projectiles.splice(i, 1);
 
-          if (bDist < 3.0) {
+          if (bDist < 3.2) {
+            spawnSplashBurst(hitX, 2.2, hitZ, p.type === 'water' ? 0x06b6d4 : 0xfacc15, 8);
             if (eng.bossShield > 0) {
               eng.bossShield = Math.max(0, eng.bossShield - p.damage);
               setHudBossShield(eng.bossShield);
               if (eng.bossShield <= 0 && eng.bossShieldMesh) {
                 eng.bossShieldMesh.visible = false;
-                setRefereeCall('🎉 ¡Escudo roto! Dispara al villano');
+                setRefereeCall(`Escudo roto`);
               }
             } else {
               eng.bossHp = Math.max(0, eng.bossHp - p.damage);
@@ -1134,37 +1324,36 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
               if (eng.bossHp <= 0) {
                 eng.gameActive = false;
                 setIsVictory(true);
-                onAddCoinsRef.current(100);
+                onAddCoinsRef.current(250);
                 soundEffects.playVictoryFanfare();
-                confetti({ particleCount: 180, spread: 100, origin: { y: 0.6 } });
+                confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
               }
             }
           }
         }
       }
 
-      // Boss AI
       if (bossGroup) {
-        bossGroup.position.y = Math.sin(elapsed * 2) * 0.25;
+        bossGroup.position.y = Math.sin(elapsed * 2.2) * 0.25;
         const bdx = eng.heroPos.x - bossGroup.position.x;
         const bdz = eng.heroPos.z - bossGroup.position.z;
         bossGroup.rotation.y = Math.atan2(bdx, bdz);
 
         if (eng.bossFlashTimer > 0) {
           eng.bossFlashTimer--;
-          bossMat.emissive.setHex(0xff0000);
-          bossMat.emissiveIntensity = 2.0;
+          bossMat.emissive.setHex(0x06b6d4);
+          bossMat.emissiveIntensity = 1.8;
         } else {
           bossMat.emissive.setHex(0x000000);
           bossMat.emissiveIntensity = 0;
         }
 
         eng.bossAttackTimer += delta;
-        if (eng.bossAttackTimer > 3.8) {
+        if (eng.bossAttackTimer > 4.0) {
           eng.bossAttackTimer = 0;
           const bomb = new THREE.Mesh(
-            new THREE.SphereGeometry(0.45, 8, 8),
-            new THREE.MeshBasicMaterial({ color: 0x84cc16 })
+            BOMB_GEOMETRY,
+            new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.5 })
           );
           bomb.position.set(bossGroup.position.x, 2.2, bossGroup.position.z);
           scene.add(bomb);
@@ -1172,20 +1361,19 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
           const pDist = Math.hypot(bdx, bdz) || 1;
           eng.projectiles.push({
             mesh: bomb,
-            vx: (bdx / pDist) * 0.4,
-            vz: (bdz / pDist) * 0.4,
+            vx: (bdx / pDist) * 0.38,
+            vy: 0,
+            vz: (bdz / pDist) * 0.38,
             life: 65,
-            damage: 12,
+            damage: 10,
             type: 'trash_bomb',
             isEnemy: true,
           });
         }
       }
 
-      // Spin collectibles & auto-collect when kid walks right over them!
       for (const item of eng.collectibles) {
         if (!item.collected) {
-          item.mesh.rotation.y = elapsed * 2.0;
           const dist = Math.hypot(item.x - eng.heroPos.x, item.z - eng.heroPos.z);
           if (dist < 2.6) {
             actionsRef.current.onCollect();
@@ -1213,40 +1401,66 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', handleResize);
+
+      eng.projectiles.forEach((p) => {
+        scene.remove(p.mesh);
+        disposeMeshMaterial(p.mesh);
+      });
+      eng.projectiles = [];
+
+      eng.particles.forEach((pt) => {
+        scene.remove(pt.mesh);
+        disposeMeshMaterial(pt.mesh);
+      });
+      eng.particles = [];
+
+      scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          disposeMeshMaterial(obj);
+          const geo = obj.geometry;
+          if (
+            geo &&
+            geo !== ORB_GEOMETRY &&
+            geo !== WATER_DROP_GEOMETRY &&
+            geo !== BOMB_GEOMETRY &&
+            geo !== PARTICLE_GEOMETRY
+          ) {
+            geo.dispose();
+          }
+        }
+      });
+
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
       renderer.dispose();
     };
-  }, [level.id, muscleScale]);
+  }, [level.id, level.biome, level.habitCategory, level.objectiveCount, level.villainColor, level.villainHp, level.villainPowers, muscleScale, resolvedArchetype, completeObjectiveItem, spawnSplashBurst]);
 
   const handleRestart = () => {
     soundEffects.playClickSound();
     const eng = engineRef.current;
     eng.gameActive = true;
-    eng.heroPos = { x: 0, y: 0, z: 8 };
+    eng.heroPos = { x: 0, y: 0, z: 9 };
     eng.heroHp = 100;
     eng.bossHp = level.villainHp;
     eng.bossShield = level.villainPowers.includes('escudo_oscuro') ? 100 : 0;
     eng.objectivesDone = 0;
-    eng.hasLionKey = false;
-    eng.isLionFreed = false;
 
-    setHasLionKey(false);
-    setIsLionFreed(false);
     setHudHp(100);
     setHudBossHp(level.villainHp);
     setHudBossShield(eng.bossShield);
     setHudObjectives(0);
     setIsVictory(false);
     setIsDefeat(false);
-    setRefereeCall('🏁 Partida reiniciada. ¡A jugar limpio!');
+    setRefereeCall('Capítulo reiniciado');
 
     eng.collectibles.forEach((c) => {
       c.collected = false;
-      c.mesh.visible = true;
+      c.threatGroup.visible = true;
+      c.restoredGroup.visible = false;
+      (c.ringMesh.material as THREE.MeshBasicMaterial).color.setHex(0xf59e0b);
     });
-    if (eng.cageMesh) eng.cageMesh.visible = true;
     if (eng.bossShieldMesh) eng.bossShieldMesh.visible = true;
   };
 
@@ -1258,7 +1472,7 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
     setSelectedTriviaOption(idx);
     if (idx === level.trivia.correctIndex) {
       setTriviaResult('correct');
-      awardGreenCard('🟩 ¡Respuesta ejemplar! Escudo del villano destruido');
+      awardGreenCard('¡Respuesta correcta! Escudo roto');
       onAddCoinsRef.current(500);
       engineRef.current.heroHp = 100;
       engineRef.current.bossShield = 0;
@@ -1267,11 +1481,11 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
       }
       setHudHp(100);
       setHudBossShield(0);
-      triggerCoinToast('🎉 +500 🪙 & Vida al 100%!');
+      triggerCoinToast('✨ Escudo destruido +500 🪙');
     } else {
       setTriviaResult('wrong');
       soundEffects.playRefereeWhistle();
-      setRefereeCall('¡FALTA! 🟨 Infracción en respuesta');
+      setRefereeCall('Intenta otra opción');
       soundEffects.playBossHurtSound();
     }
   };
@@ -1279,105 +1493,85 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
   const heartsCount = Math.ceil((hudHp / 100) * 5);
 
   return (
-    <div className="relative w-full h-[calc(100dvh-64px)] sm:h-[calc(100vh-84px)] min-h-[520px] max-h-[960px] bg-slate-950 rounded-2xl sm:rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl select-none touch-none">
-      {/* FULL-SCREEN 3D CANVAS */}
+    <div className="relative w-full h-[calc(100dvh-64px)] sm:h-[calc(100vh-84px)] min-h-[540px] max-h-[960px] bg-slate-950 rounded-3xl overflow-hidden border border-slate-800 shadow-2xl select-none touch-none">
+      {/* 3D CANVAS */}
       <div ref={mountRef} className="w-full h-full cursor-crosshair touch-none" />
 
-      {/* FLOATING REWARD TOAST */}
+      {/* TOAST NOTIFICATION */}
       {coinRewardToast && (
-        <div className="absolute top-20 sm:top-24 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 font-heading font-black text-xs sm:text-sm px-4 sm:px-6 py-2 sm:py-2.5 rounded-full shadow-2xl z-30 animate-bounce flex items-center gap-2 pointer-events-none">
-          <Sparkles className="w-4 h-4 sm:w-5 sm:h-5" />
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-slate-900/90 text-white font-medium text-xs px-4 py-2 rounded-full shadow-2xl z-30 animate-bounce flex items-center gap-2 pointer-events-none border border-white/20 backdrop-blur-md">
+          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
           <span>{coinRewardToast}</span>
         </div>
       )}
 
-      {/* ==========================================
-          KID-FRIENDLY RESPONSIVE TOP HUD
-         ========================================== */}
-      <div className="absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 pointer-events-none z-10">
-        {/* 1. HERO & HEARTS PILL (Tap to switch hero!) */}
+      {/* AWWWARDS MINIMALIST FLOATING TOP HUD */}
+      <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-3 pointer-events-none z-10">
+        {/* Left: Hero & Hearts Capsule */}
         <button
           onClick={handleSwapHero}
-          className="bg-slate-950/90 backdrop-blur-md border-2 border-slate-700 hover:border-cyan-400 rounded-xl sm:rounded-2xl p-1.5 sm:p-2 pr-2.5 sm:pr-4 shadow-xl flex items-center gap-2 sm:gap-3 pointer-events-auto active:scale-95 transition-all"
-          title="Toca para alternar entre Richard y Juan"
+          className="pointer-events-auto flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-slate-900/60 hover:bg-slate-900/80 backdrop-blur-xl border border-white/10 text-white shadow-lg active:scale-95 transition-all"
+          title="Toca para alternar héroe"
         >
-          <Hero3DPortrait heroId={activeHero} size={42} muscleLevel={level.id} />
-          <div className="text-left">
-            <div className="flex items-center gap-1">
-              <span className="font-heading font-black text-xs sm:text-sm text-white">
-                {HERO_DUO[activeHero].name.toUpperCase()}
-              </span>
-              <span className="text-[9px] sm:text-[10px] bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded-full font-black">
-                CAMBIAR
-              </span>
-            </div>
-            {/* 5 Visual Hearts for Kids */}
-            <div className="flex items-center gap-0.5 sm:gap-1 mt-0.5">
-              {[1, 2, 3, 4, 5].map((h) => (
-                <Heart
-                  key={h}
-                  className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
-                    h <= heartsCount
-                      ? 'text-rose-500 fill-rose-500'
-                      : 'text-slate-700 fill-slate-800'
-                  }`}
-                />
-              ))}
-            </div>
+          <span className="text-xs font-bold text-sky-400">
+            {activeHero === 'richard' ? 'Richard' : 'Juan'}
+          </span>
+          <div className="flex items-center gap-1">
+            {[1, 2, 3, 4, 5].map((h) => (
+              <span
+                key={h}
+                className={`w-2 h-2 rounded-full transition-all ${
+                  h <= heartsCount ? 'bg-rose-500 scale-100' : 'bg-slate-600/60 scale-75'
+                }`}
+              />
+            ))}
           </div>
         </button>
 
-        {/* 2. REFEREE LIVE CALL & BONUS TRIVIA */}
-        <div className="bg-slate-950/90 backdrop-blur-md border-2 border-amber-400/70 rounded-xl sm:rounded-2xl px-2.5 sm:px-3.5 py-1.5 sm:py-2 shadow-xl flex items-center gap-2 sm:gap-3 pointer-events-auto max-w-[210px] sm:max-w-[320px]">
-          <Referee3DPortrait size={38} />
-          <div className="text-left min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 text-[9px] sm:text-[10px] font-black uppercase text-amber-400">
-              <span>ÁRBITRO 3D</span>
-              <span>·</span>
-              <span className="text-emerald-400">🌟 {hudObjectives}/{level.objectiveCount}</span>
-            </div>
-            <p className="text-[11px] sm:text-xs font-bold text-white truncate">{refereeCall}</p>
-          </div>
-
+        {/* Center: Clean Progress Pill */}
+        <div className="pointer-events-auto flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-900/60 backdrop-blur-xl border border-white/10 text-white shadow-lg text-xs">
+          <span className="font-semibold text-emerald-400">
+            {hudObjectives}/{level.objectiveCount}
+          </span>
+          <span className="text-slate-400 font-normal truncate max-w-[140px] sm:max-w-[200px]">
+            {refereeCall}
+          </span>
           <button
             onClick={() => {
               soundEffects.playClickSound();
               setShowTriviaModal(true);
             }}
-            className="px-2 sm:px-2.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[10px] sm:text-xs rounded-lg sm:rounded-xl shadow flex items-center gap-1 shrink-0 active:scale-95 transition-transform"
-            title="Pregunta del Árbitro para romper escudo"
+            className="w-5 h-5 rounded-full bg-amber-400/20 hover:bg-amber-400/40 text-amber-300 flex items-center justify-center transition-colors ml-1"
+            title="Pregunta de hábitos para romper el escudo"
           >
             <HelpCircle className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">BONUS</span>
           </button>
         </div>
 
-        {/* 3. VILLAIN HEALTH, AUDIO & EXIT */}
-        <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
-          <div className="bg-slate-950/90 backdrop-blur-md border-2 border-rose-500/60 rounded-xl sm:rounded-2xl p-1.5 sm:p-2 pl-2 sm:pl-3 shadow-xl flex items-center gap-2">
-            <div className="text-right min-w-[70px] sm:min-w-[90px]">
-              <span className="text-[10px] sm:text-xs font-black text-rose-300 block truncate max-w-[90px] sm:max-w-[110px]">
-                {level.villainName.split(' ')[0]}
-              </span>
-              <div className="w-full h-2 sm:h-2.5 bg-slate-800 rounded-full overflow-hidden mt-0.5">
-                <div
-                  className="h-full bg-gradient-to-r from-rose-500 to-amber-500 transition-all"
-                  style={{ width: `${(hudBossHp / level.villainHp) * 100}%` }}
-                />
-              </div>
-              {hudBossShield > 0 && (
-                <span className="text-[8px] sm:text-[9px] font-black text-purple-300 block">
-                  🛡️ {hudBossShield}%
-                </span>
-              )}
+        {/* Right: Boss Health & Minimal Actions */}
+        <div className="pointer-events-auto flex items-center gap-2">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/60 backdrop-blur-xl border border-white/10 text-white shadow-lg text-xs">
+            <span className="font-semibold text-rose-400 max-w-[80px] sm:max-w-[120px] truncate">
+              {level.villainName.split(' ')[0]}
+            </span>
+            <div className="w-14 sm:w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-rose-500 transition-all"
+                style={{ width: `${(hudBossHp / level.villainHp) * 100}%` }}
+              />
             </div>
-            <Villain3DPortrait
-              name={level.villainName.split(' ')[0]}
-              title={level.villainTitle}
-              color={level.villainColor}
-              size={36}
-            />
+            {hudBossShield > 0 && (
+              <span className="text-[10px] text-purple-400 font-bold">🛡️</span>
+            )}
           </div>
+
+          <button
+            onClick={() => setShowStoryIntro(true)}
+            className="w-8 h-8 rounded-full bg-slate-900/60 hover:bg-slate-900/80 backdrop-blur-xl border border-white/10 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
+            title="Misión del capítulo"
+          >
+            <Info className="w-3.5 h-3.5" />
+          </button>
 
           <button
             onClick={() => {
@@ -1385,47 +1579,33 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
               soundEffects.enabled = next;
               setSoundOn(next);
             }}
-            className="p-2 sm:p-2.5 bg-slate-900/90 hover:bg-slate-800 text-slate-200 rounded-xl sm:rounded-2xl border-2 border-slate-700 shadow-xl transition-colors"
+            className="w-8 h-8 rounded-full bg-slate-900/60 hover:bg-slate-900/80 backdrop-blur-xl border border-white/10 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
             title={soundOn ? 'Silenciar' : 'Activar sonido'}
           >
-            {soundOn ? <Volume2 className="w-4 h-4 text-cyan-400" /> : <VolumeX className="w-4 h-4" />}
+            {soundOn ? <Volume2 className="w-3.5 h-3.5 text-sky-400" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
 
           <button
             onClick={onExitArena}
-            className="p-2 sm:p-2.5 bg-slate-900/90 hover:bg-rose-600 text-white rounded-xl sm:rounded-2xl border-2 border-slate-700 shadow-xl transition-colors"
-            title="Salir al Mapa"
+            className="w-8 h-8 rounded-full bg-slate-900/60 hover:bg-rose-500/80 backdrop-blur-xl border border-white/10 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
+            title="Salir"
           >
-            <LogOut className="w-4 h-4" />
+            <LogOut className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* SPECIAL MISSION VISUAL PILL (Rome Key) */}
-      {level.specialMissionType === 'colosseum_lion_key' && !isLionFreed && (
-        <div className="absolute top-16 sm:top-20 left-3 sm:left-4 bg-amber-400 text-slate-950 font-black text-[11px] sm:text-xs px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl sm:rounded-2xl shadow-xl flex items-center gap-1.5 sm:gap-2 z-20 pointer-events-none">
-          <Key className="w-4 h-4" />
-          <span>
-            {hasLionKey
-              ? '¡Ve a la jaula central para liberar al León! 🦁'
-              : '¡Busca la Llave Dorada brillante en la arena! 🔑'}
-          </span>
-        </div>
-      )}
-
-      {/* ========================================================
-          WEAPON & ELEMENTAL POWERS SELECTOR BAR
-         ======================================================== */}
-      <div className="absolute bottom-[170px] sm:bottom-[150px] left-1/2 -translate-x-1/2 z-20 pointer-events-auto flex items-center gap-1 sm:gap-1.5 bg-slate-950/90 backdrop-blur-md px-2 py-1.5 rounded-2xl border-2 border-slate-700 shadow-2xl max-w-[94vw] overflow-x-auto touch-none">
+      {/* FLOATING WEAPONS DOCK (Bottom-Center) */}
+      <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 pointer-events-auto flex items-center gap-1 p-1 rounded-2xl bg-slate-900/70 backdrop-blur-xl border border-white/15 shadow-2xl">
         <button
           onClick={() => {
             soundEffects.playWaterStreamSound();
             setActiveWeapon('water_cannon');
           }}
-          className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black transition-all flex items-center gap-1 whitespace-nowrap active:scale-95 ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
             activeWeapon === 'water_cannon'
-              ? 'bg-cyan-400 text-slate-950 shadow-md scale-105'
-              : 'text-slate-300 hover:text-white'
+              ? 'bg-cyan-500 text-white shadow-sm'
+              : 'text-slate-400 hover:text-white'
           }`}
         >
           <span>💧</span>
@@ -1436,10 +1616,10 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
             soundEffects.playLightningSound();
             setActiveWeapon('lightning_staff');
           }}
-          className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black transition-all flex items-center gap-1 whitespace-nowrap active:scale-95 ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
             activeWeapon === 'lightning_staff'
-              ? 'bg-sky-400 text-slate-950 shadow-md scale-105'
-              : 'text-slate-300 hover:text-white'
+              ? 'bg-sky-500 text-white shadow-sm'
+              : 'text-slate-400 hover:text-white'
           }`}
         >
           <span>⚡</span>
@@ -1450,24 +1630,24 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
             soundEffects.playFireballSound();
             setActiveWeapon('fire_orb');
           }}
-          className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black transition-all flex items-center gap-1 whitespace-nowrap active:scale-95 ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
             activeWeapon === 'fire_orb'
-              ? 'bg-orange-500 text-white shadow-md scale-105'
-              : 'text-slate-300 hover:text-white'
+              ? 'bg-amber-500 text-white shadow-sm'
+              : 'text-slate-400 hover:text-white'
           }`}
         >
-          <span>🔥</span>
-          <span>Fuego</span>
+          <span>☀️</span>
+          <span>Sol</span>
         </button>
         <button
           onClick={() => {
             soundEffects.playBatSwingSound();
             setActiveWeapon('bat');
           }}
-          className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black transition-all flex items-center gap-1 whitespace-nowrap active:scale-95 ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
             activeWeapon === 'bat'
-              ? 'bg-amber-400 text-slate-950 shadow-md scale-105'
-              : 'text-slate-300 hover:text-white'
+              ? 'bg-amber-400 text-slate-900 shadow-sm'
+              : 'text-slate-400 hover:text-white'
           }`}
         >
           <span>🏏</span>
@@ -1478,10 +1658,10 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
             soundEffects.playClickSound();
             setActiveWeapon('shield');
           }}
-          className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black transition-all flex items-center gap-1 whitespace-nowrap active:scale-95 ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
             activeWeapon === 'shield'
-              ? 'bg-emerald-400 text-slate-950 shadow-md scale-105'
-              : 'text-slate-300 hover:text-white'
+              ? 'bg-emerald-500 text-white shadow-sm'
+              : 'text-slate-400 hover:text-white'
           }`}
         >
           <span>🛡️</span>
@@ -1489,28 +1669,31 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
         </button>
       </div>
 
-      {/* ========================================================
-          MOBILE & DESKTOP ON-SCREEN TOUCH CONTROLS
-         ======================================================== */}
-      {/* LEFT THUMB ZONE: D-PAD + QUICK CHARACTER SWAP */}
-      <div className="absolute bottom-3 sm:bottom-4 left-3 sm:left-4 z-20 pointer-events-auto flex flex-col items-center gap-2 touch-none select-none">
-        {/* Quick Hero Swap Button for Left Thumb */}
+      {/* CONTROLS (Left: D-Pad, Right: Actions) */}
+      {/* Left: Sleek D-Pad */}
+      <div className="absolute bottom-4 left-4 z-20 pointer-events-auto flex flex-col items-center gap-1">
         <button
-          onClick={handleSwapHero}
-          className="w-full bg-slate-950/90 backdrop-blur-md border-2 border-cyan-400/80 hover:border-cyan-300 active:scale-95 text-cyan-300 px-3 py-1.5 rounded-2xl text-[11px] sm:text-xs font-heading font-black shadow-lg flex items-center justify-center gap-1.5"
-          title="Alternar entre Richard y Juan"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+            setTouchMove(0, -1);
+          }}
+          onPointerUp={(e) => {
+            e.preventDefault();
+            try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+            setTouchMove(0, 0);
+          }}
+          onPointerCancel={() => setTouchMove(0, 0)}
+          className="w-10 h-10 rounded-xl bg-slate-900/60 hover:bg-slate-900/80 backdrop-blur-md border border-white/10 text-white flex items-center justify-center transition-colors active:scale-95"
         >
-          <span className="text-base">{activeHero === 'richard' ? '🧡' : '💚'}</span>
-          <span>CAMBIAR [{activeHero === 'richard' ? 'JUAN' : 'RICHARD'}]</span>
+          <ArrowUp className="w-4 h-4 pointer-events-none" />
         </button>
-
-        {/* 4-Way Virtual D-Pad with generous touch-responsive buttons */}
-        <div className="bg-slate-950/90 backdrop-blur-md border-2 border-slate-700/80 p-1.5 sm:p-2 rounded-3xl shadow-2xl flex flex-col items-center gap-1 sm:gap-1.5">
+        <div className="flex gap-1">
           <button
             onPointerDown={(e) => {
               e.preventDefault();
               try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
-              setTouchMove(0, -1);
+              setTouchMove(-1, 0);
             }}
             onPointerUp={(e) => {
               e.preventDefault();
@@ -1518,202 +1701,182 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
               setTouchMove(0, 0);
             }}
             onPointerCancel={() => setTouchMove(0, 0)}
-            className="w-11 h-11 sm:w-12 sm:h-12 bg-slate-800/90 hover:bg-slate-700 active:bg-cyan-500 active:text-slate-950 text-white rounded-2xl flex items-center justify-center shadow transition-colors touch-none select-none"
-            title="Avanzar (Arriba / W)"
+            className="w-10 h-10 rounded-xl bg-slate-900/60 hover:bg-slate-900/80 backdrop-blur-md border border-white/10 text-white flex items-center justify-center transition-colors active:scale-95"
           >
-            <ArrowUp className="w-5 h-5 sm:w-6 sm:h-6 pointer-events-none" />
+            <ArrowLeft className="w-4 h-4 pointer-events-none" />
           </button>
-          <div className="flex gap-1 sm:gap-1.5">
-            <button
-              onPointerDown={(e) => {
-                e.preventDefault();
-                try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
-                setTouchMove(-1, 0);
-              }}
-              onPointerUp={(e) => {
-                e.preventDefault();
-                try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-                setTouchMove(0, 0);
-              }}
-              onPointerCancel={() => setTouchMove(0, 0)}
-              className="w-11 h-11 sm:w-12 sm:h-12 bg-slate-800/90 hover:bg-slate-700 active:bg-cyan-500 active:text-slate-950 text-white rounded-2xl flex items-center justify-center shadow transition-colors touch-none select-none"
-              title="Izquierda (A)"
-            >
-              <ArrowLeft className="w-5 h-5 sm:w-6 sm:h-6 pointer-events-none" />
-            </button>
-            <button
-              onPointerDown={(e) => {
-                e.preventDefault();
-                try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
-                setTouchMove(0, 1);
-              }}
-              onPointerUp={(e) => {
-                e.preventDefault();
-                try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-                setTouchMove(0, 0);
-              }}
-              onPointerCancel={() => setTouchMove(0, 0)}
-              className="w-11 h-11 sm:w-12 sm:h-12 bg-slate-800/90 hover:bg-slate-700 active:bg-cyan-500 active:text-slate-950 text-white rounded-2xl flex items-center justify-center shadow transition-colors touch-none select-none"
-              title="Retroceder (Abajo / S)"
-            >
-              <ArrowDown className="w-5 h-5 sm:w-6 sm:h-6 pointer-events-none" />
-            </button>
-            <button
-              onPointerDown={(e) => {
-                e.preventDefault();
-                try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
-                setTouchMove(1, 0);
-              }}
-              onPointerUp={(e) => {
-                e.preventDefault();
-                try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-                setTouchMove(0, 0);
-              }}
-              onPointerCancel={() => setTouchMove(0, 0)}
-              className="w-11 h-11 sm:w-12 sm:h-12 bg-slate-800/90 hover:bg-slate-700 active:bg-cyan-500 active:text-slate-950 text-white rounded-2xl flex items-center justify-center shadow transition-colors touch-none select-none"
-              title="Derecha (D)"
-            >
-              <ArrowRight className="w-5 h-5 sm:w-6 sm:h-6 pointer-events-none" />
-            </button>
-          </div>
+          <button
+            onPointerDown={(e) => {
+              e.preventDefault();
+              try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+              setTouchMove(0, 1);
+            }}
+            onPointerUp={(e) => {
+              e.preventDefault();
+              try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+              setTouchMove(0, 0);
+            }}
+            onPointerCancel={() => setTouchMove(0, 0)}
+            className="w-10 h-10 rounded-xl bg-slate-900/60 hover:bg-slate-900/80 backdrop-blur-md border border-white/10 text-white flex items-center justify-center transition-colors active:scale-95"
+          >
+            <ArrowDown className="w-4 h-4 pointer-events-none" />
+          </button>
+          <button
+            onPointerDown={(e) => {
+              e.preventDefault();
+              try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+              setTouchMove(1, 0);
+            }}
+            onPointerUp={(e) => {
+              e.preventDefault();
+              try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+              setTouchMove(0, 0);
+            }}
+            onPointerCancel={() => setTouchMove(0, 0)}
+            className="w-10 h-10 rounded-xl bg-slate-900/60 hover:bg-slate-900/80 backdrop-blur-md border border-white/10 text-white flex items-center justify-center transition-colors active:scale-95"
+          >
+            <ArrowRight className="w-4 h-4 pointer-events-none" />
+          </button>
         </div>
       </div>
 
-      {/* RIGHT THUMB ZONE: ACTION BUTTONS, GTA VEHICLE/FLIGHT & POWER PEARLS */}
-      <div className="absolute bottom-3 sm:bottom-4 right-3 sm:right-4 z-20 pointer-events-auto flex flex-col items-end gap-2 touch-none select-none">
-        {/* Row 1: Vehicle & Flight Mode + Power Pearls */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Teleport Pearl Button */}
+      {/* Right: Mode Toggles & Action Triggers */}
+      <div className="absolute bottom-4 right-4 z-20 pointer-events-auto flex flex-col items-end gap-2.5">
+        <div className="flex items-center gap-1.5">
           <button
             onClick={handleUseTeleportPearl}
             disabled={pearlsTeleport <= 0}
-            className={`px-2.5 sm:px-3 py-2 rounded-2xl font-black text-[10px] sm:text-xs flex items-center gap-1 border shadow-lg transition-all active:scale-95 ${
-              pearlsTeleport > 0
-                ? 'bg-purple-950/80 border-purple-500 text-purple-300 hover:bg-purple-900'
-                : 'bg-slate-900/60 border-slate-800 text-slate-500 opacity-60'
-            }`}
-            title="Teletransporte instantáneo [T]"
+            className="px-2.5 py-1.5 rounded-xl bg-slate-900/60 backdrop-blur-md border border-white/10 text-xs text-purple-300 font-semibold flex items-center gap-1 active:scale-95 disabled:opacity-40"
           >
             <span>🔮</span>
-            <span>TELEPORT</span>
-            <span className="bg-purple-500 text-slate-950 px-1.5 py-0.2 rounded-full text-[9px] font-black">
-              {pearlsTeleport}
-            </span>
+            <span>{pearlsTeleport}</span>
           </button>
-
-          {/* Nitro Speed Pearl Button */}
           <button
             onClick={handleUseSpeedPearl}
             disabled={pearlsSpeed <= 0}
-            className={`px-2.5 sm:px-3 py-2 rounded-2xl font-black text-[10px] sm:text-xs flex items-center gap-1 border shadow-lg transition-all active:scale-95 ${
-              pearlsSpeed > 0
-                ? 'bg-amber-950/80 border-amber-500 text-amber-300 hover:bg-amber-900'
-                : 'bg-slate-900/60 border-slate-800 text-slate-500 opacity-60'
-            }`}
-            title="Súper velocidad sónica [Shift]"
+            className="px-2.5 py-1.5 rounded-xl bg-slate-900/60 backdrop-blur-md border border-white/10 text-xs text-amber-300 font-semibold flex items-center gap-1 active:scale-95 disabled:opacity-40"
           >
             <span>⚡</span>
-            <span>NITRO</span>
-            <span className="bg-amber-400 text-slate-950 px-1.5 py-0.2 rounded-full text-[9px] font-black">
-              {pearlsSpeed}
-            </span>
+            <span>{pearlsSpeed}</span>
           </button>
-
-          {/* GTA Eco-Buggy Car Mode Toggle */}
           <button
             onClick={handleToggleVehicle}
-            className={`px-2.5 sm:px-3.5 py-2 rounded-2xl font-heading font-black text-[10px] sm:text-xs flex items-center gap-1 border-2 shadow-xl transition-all active:scale-95 ${
+            className={`p-2 rounded-xl border backdrop-blur-md transition-all active:scale-95 ${
               movementMode === 'in_vehicle'
-                ? 'bg-emerald-400 border-white text-slate-950 scale-105'
-                : 'bg-slate-950/90 border-slate-700 text-emerald-400 hover:border-emerald-400'
+                ? 'bg-emerald-500 border-white text-white'
+                : 'bg-slate-900/60 border-white/10 text-slate-300'
             }`}
-            title="Conducir Carro [E]"
+            title="Auto"
           >
             <Car className="w-4 h-4" />
-            <span className="hidden xs:inline sm:inline">CARRO</span>
           </button>
-
-          {/* Plane Flight Mode Toggle */}
           <button
             onClick={handleToggleFlight}
-            className={`px-2.5 sm:px-3.5 py-2 rounded-2xl font-heading font-black text-[10px] sm:text-xs flex items-center gap-1 border-2 shadow-xl transition-all active:scale-95 ${
+            className={`p-2 rounded-xl border backdrop-blur-md transition-all active:scale-95 ${
               movementMode === 'flying'
-                ? 'bg-sky-400 border-white text-slate-950 scale-105'
-                : 'bg-slate-950/90 border-slate-700 text-sky-400 hover:border-sky-400'
+                ? 'bg-sky-500 border-white text-white'
+                : 'bg-slate-900/60 border-white/10 text-slate-300'
             }`}
-            title="Volar / Planear [F]"
+            title="Volar"
           >
             <Plane className="w-4 h-4" />
-            <span className="hidden xs:inline sm:inline">VOLAR</span>
           </button>
         </div>
 
-        {/* Row 2: Big Dual Action Buttons (Clean / Habit & Attack) */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Big Clean / Collect Habit Button */}
+        {/* Dual Primary Action Triggers */}
+        <div className="flex items-center gap-2">
           <button
             onClick={handleCollect}
-            className="w-20 h-16 sm:w-28 sm:h-16 bg-gradient-to-br from-emerald-400 to-teal-500 hover:from-emerald-300 hover:to-teal-400 active:scale-90 text-slate-950 font-heading font-black text-xs sm:text-sm rounded-2xl sm:rounded-3xl shadow-2xl border-2 border-emerald-200 flex flex-col items-center justify-center gap-0.5"
-            title="Limpiar contaminación y recolectar [J]"
+            className="px-4 py-3 rounded-2xl bg-emerald-500/90 hover:bg-emerald-500 backdrop-blur-md text-white font-heading font-bold text-xs shadow-lg active:scale-95 transition-all flex items-center gap-1.5"
           >
-            <Sparkles className="w-5 h-5 sm:w-6 sm:h-6" />
-            <span>LIMPIAR [J]</span>
+            <Sparkles className="w-4 h-4" />
+            <span>Acción [J]</span>
           </button>
-
-          {/* Big Attack / Fire Button */}
           <button
             onClick={handleAttack}
-            className="w-24 h-16 sm:w-32 sm:h-16 bg-gradient-to-br from-rose-500 to-red-600 hover:from-rose-400 hover:to-red-500 active:scale-90 text-white font-heading font-black text-xs sm:text-sm rounded-2xl sm:rounded-3xl shadow-2xl border-2 border-rose-300 flex flex-col items-center justify-center gap-0.5"
-            title="Disparar Poder o Batir [K / Espacio]"
+            className="px-5 py-3 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-white font-heading font-bold text-xs shadow-lg shadow-cyan-500/20 active:scale-95 transition-all flex items-center gap-1.5"
           >
-            <Crosshair className="w-5 h-5 sm:w-6 sm:h-6" />
-            <span>DISPARAR [K]</span>
+            <Droplets className="w-4 h-4" />
+            <span>Agua [K]</span>
           </button>
         </div>
       </div>
 
-      {/* KID-FRIENDLY TRIVIA BONUS MODAL */}
-      {showTriviaModal && (
-        <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-6 z-40">
-          <div className="bg-slate-900 border-2 border-amber-400 rounded-3xl p-6 max-w-lg w-full shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <Referee3DPortrait size={54} />
-                <div>
-                  <span className="text-xs font-black text-amber-400 uppercase block">
-                    PREGUNTA DEL ÁRBITRO
-                  </span>
-                  <h3 className="font-heading font-black text-white text-base">
-                    ¡Gana Tarjeta Verde y Rompe el Escudo!
-                  </h3>
-                </div>
+      {/* STORY BRIEFING CARD (Uncluttered, Editorial, Awwwards Style) */}
+      {showStoryIntro && (
+        <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4 z-40">
+          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-md w-full shadow-2xl border border-slate-200/80 animate-float">
+            <div className="flex items-center justify-between text-xs text-slate-400 font-semibold mb-2">
+              <span>{level.historicalEra}</span>
+              <span>{level.locationName?.split(' · ')[0]}</span>
+            </div>
+
+            <h2 className="text-xl sm:text-2xl font-heading font-extrabold text-slate-900 tracking-tight mb-2">
+              {level.title.split(': ')[1] || level.title}
+            </h2>
+
+            <p className="text-xs text-slate-600 font-medium leading-relaxed mb-4">
+              {level.humanLifeStory}
+            </p>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 mb-5 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-cyan-100 text-cyan-700 flex items-center justify-center shrink-0">
+                <Droplets className="w-5 h-5" />
               </div>
+              <div className="text-xs">
+                <span className="font-bold text-slate-900 block">Tu Objetivo</span>
+                <span className="text-slate-500">{level.habitDescription}</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                soundEffects.playClickSound();
+                setShowStoryIntro(false);
+              }}
+              className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-heading font-bold text-xs uppercase tracking-wider rounded-xl shadow-md transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+            >
+              <span>Comenzar Capítulo</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* TRIVIA DIALOG (Clean & Minimalist) */}
+      {showTriviaModal && (
+        <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-4 z-40">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-200/80">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wide">
+                Pregunta de Buenos Hábitos
+              </span>
               <button
                 onClick={() => {
                   setShowTriviaModal(false);
                   setSelectedTriviaOption(null);
                   setTriviaResult(null);
                 }}
-                className="px-3 py-1.5 rounded-xl bg-slate-800 text-xs font-bold text-slate-300"
+                className="text-xs font-semibold text-slate-400 hover:text-slate-700"
               >
                 Cerrar
               </button>
             </div>
 
-            <p className="text-sm font-bold text-white mb-4 bg-slate-950 p-3.5 rounded-2xl border border-slate-800">
+            <h3 className="text-sm sm:text-base font-heading font-bold text-slate-900 mb-4 leading-snug">
               {level.trivia.question}
-            </p>
+            </h3>
 
-            <div className="flex flex-col gap-2.5 mb-4">
+            <div className="flex flex-col gap-2 mb-4">
               {level.trivia.options.map((opt, idx) => {
                 const isSelected = selectedTriviaOption === idx;
                 const isCorrect = idx === level.trivia.correctIndex;
-                let btnStyle = 'bg-slate-950 border-slate-800 text-slate-200 hover:border-cyan-400';
+                let btnStyle = 'bg-slate-50 border-slate-200/80 text-slate-700 hover:bg-slate-100';
 
                 if (triviaResult && isSelected) {
                   btnStyle = isCorrect
-                    ? 'bg-emerald-950 border-emerald-400 text-emerald-300'
-                    : 'bg-rose-950 border-rose-400 text-rose-300';
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                    : 'bg-rose-50 border-rose-400 text-rose-800';
                 }
 
                 return (
@@ -1721,11 +1884,8 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
                     key={idx}
                     disabled={triviaResult !== null}
                     onClick={() => handleAnswerTrivia(idx)}
-                    className={`p-3.5 rounded-2xl border-2 text-left text-xs font-bold transition-all flex items-center gap-3 ${btnStyle}`}
+                    className={`p-3 rounded-xl border text-left text-xs font-medium transition-all ${btnStyle}`}
                   >
-                    <span className="w-6 h-6 rounded-full bg-slate-800 text-amber-400 flex items-center justify-center font-black shrink-0">
-                      {idx + 1}
-                    </span>
                     <span>{opt}</span>
                   </button>
                 );
@@ -1733,105 +1893,69 @@ export const ThreeGameArena: React.FC<ThreeGameArenaProps> = ({
             </div>
 
             {triviaResult && (
-              <div
-                className={`p-3.5 rounded-2xl border-2 text-xs font-bold ${
-                  triviaResult === 'correct'
-                    ? 'bg-emerald-950/60 border-emerald-400 text-emerald-300'
-                    : 'bg-rose-950/60 border-rose-400 text-rose-300'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  {triviaResult === 'correct' ? (
-                    <>
-                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                      <span>¡TARJETA VERDE! +500 🪙 y Escudo Oscuro Destruido</span>
-                    </>
-                  ) : (
-                    <>
-                      <XCircle className="w-5 h-5 text-rose-400" />
-                      <span>¡Casi! Inténtalo de nuevo</span>
-                    </>
-                  )}
-                </div>
-                <p className="text-slate-200">{level.trivia.explanation}</p>
+              <div className="text-xs text-slate-600 font-medium bg-slate-50 p-3 rounded-xl">
+                {level.trivia.explanation}
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* VICTORY MODAL CERTIFIED BY THE 3D REFEREE */}
+      {/* VICTORY SCREEN */}
       {isVictory && (
-        <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-6 z-40">
-          <div className="bg-slate-900 border-2 border-emerald-400 rounded-3xl p-6 max-w-md w-full text-center shadow-2xl">
-            <div className="flex justify-center mb-3">
-              <Referee3DPortrait size={88} />
+        <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4 z-40">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center shadow-2xl border border-slate-200/80">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3 text-2xl">
+              🏆
             </div>
-
-            <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-black uppercase">
-              ✓ VICTORIA VALIDADA POR EL ÁRBITRO
+            <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wide">
+              Capítulo Superado
             </span>
-
-            <h2 className="text-2xl font-heading font-black text-white mt-2 mb-1">
-              ¡NIVEL {level.id} SUPERADO!
+            <h2 className="text-xl font-heading font-extrabold text-slate-900 mt-1 mb-2">
+              ¡Buen trabajo, Guardián!
             </h2>
-
-            <div className="bg-slate-950 rounded-2xl p-4 border border-slate-800 my-4 flex justify-around text-center">
-              <div>
-                <span className="text-xs text-slate-400 font-bold block">Premio</span>
-                <span className="text-base font-black text-amber-400">
-                  +{level.coinsReward.toLocaleString()} 🪙
-                </span>
-              </div>
-              <div className="w-px bg-slate-800" />
-              <div>
-                <span className="text-xs text-slate-400 font-bold block">Juego Limpio</span>
-                <span className="text-base font-black text-emerald-400">
-                  🟩 +{matchGreenCards} Tarjetas
-                </span>
-              </div>
-            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Medalla: <strong className="text-slate-800">{level.badgeName}</strong>
+            </p>
 
             <button
               onClick={() => {
                 onLevelComplete(level.id, level.coinsReward, level.powerReward, level.badgeName);
                 onExitArena();
               }}
-              className="w-full py-4 bg-gradient-to-r from-emerald-400 to-teal-400 hover:from-emerald-300 hover:to-teal-300 text-slate-950 font-heading font-black text-sm rounded-2xl shadow-xl flex items-center justify-center gap-2"
+              className="w-full py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-heading font-bold text-xs uppercase tracking-wider transition-all active:scale-[0.98]"
             >
-              <Award className="w-5 h-5" />
-              <span>CONTINUAR Y GUARDAR EN SERVIDOR</span>
-              <ChevronRight className="w-5 h-5" />
+              Continuar al Mapa
             </button>
           </div>
         </div>
       )}
 
-      {/* DEFEAT OVERLAY */}
+      {/* DEFEAT SCREEN */}
       {isDefeat && (
-        <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-6 z-40">
-          <div className="bg-slate-900 border-2 border-rose-500 rounded-3xl p-6 max-w-md w-full text-center shadow-2xl">
-            <div className="w-16 h-16 bg-rose-500/20 rounded-full flex items-center justify-center mx-auto mb-3 text-rose-400">
-              <RotateCcw className="w-8 h-8" />
+        <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4 z-40">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center shadow-2xl border border-slate-200/80">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3">
+              <RotateCcw className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-heading font-black text-white mb-2">
-              ¡TIEMPO FUERA DEL ÁRBITRO!
+            <h2 className="text-lg font-heading font-bold text-slate-900 mb-1">
+              Tiempo Fuera
             </h2>
-            <p className="text-xs text-slate-300 font-bold mb-5">
-              Usa el Carro [E] o responde la pregunta BONUS para destruir el escudo del villano.
+            <p className="text-xs text-slate-500 mb-5">
+              Usa tu Cañón de Agua [K] para mantener a distancia los residuos.
             </p>
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <button
                 onClick={onExitArena}
-                className="flex-1 py-3 bg-slate-800 text-white text-xs font-black rounded-2xl"
+                className="flex-1 py-2.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-200"
               >
-                MAPA
+                Salir
               </button>
               <button
                 onClick={handleRestart}
-                className="flex-1 py-3 bg-rose-600 text-white text-xs font-black rounded-2xl shadow-lg"
+                className="flex-1 py-2.5 bg-slate-900 text-white text-xs font-bold rounded-xl hover:bg-slate-800"
               >
-                REINTENTAR
+                Reintentar
               </button>
             </div>
           </div>
